@@ -47,3 +47,13 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Project-specific: raw data (downloaded from Kaggle), models, output
+data/raw/*.csv
+data/processed/*.csv
+models/*.rds
+output/*.csv
+output/*.txt
+
+# Large files
+*.feather
