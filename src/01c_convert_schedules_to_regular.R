@@ -2,6 +2,7 @@
 # 01c_convert_schedules_to_regular.R - Build MRegularSeasonCompactResults from schedules
 # =============================================================================
 # Converts raw_schedules/*.csv to M* format using TeamIDs from raw_extended (nishaanamin).
+# Uses season-specific TeamIDs from seeds so bracket prediction lookups match.
 # Run after 01b_build_historical_from_nishaa.R. Output: data/raw_extended/MRegularSeasonCompactResults.csv
 # =============================================================================
 
@@ -11,19 +12,32 @@ library(dplyr)
 
 SCHEDULES_DIR <- here("data", "raw_schedules")
 TEAMS_PATH <- here("data", "raw_extended", "MTeams.csv")
+SEEDS_PATH <- here("data", "raw_extended", "MNCAATourneySeeds.csv")
 OUT_PATH <- here("data", "raw_extended", "MRegularSeasonCompactResults.csv")
 
-#' Build name -> TeamID map from MTeams; handle common spelling variants
-build_name_to_id <- function(teams_df) {
-  teams <- teams_df %>% mutate(TeamName = trimws(TeamName))
-  exact <- setNames(teams$TeamID, teams$TeamName)
+#' Build (Season, TeamName) -> TeamID from seeds + teams (tournament teams use season-specific IDs)
+build_season_specific_mapping <- function(seeds_df, teams_df) {
+  seeds_df %>%
+    left_join(teams_df %>% select(TeamID, TeamName), by = "TeamID") %>%
+    filter(!is.na(TeamName)) %>%
+    mutate(
+      name = trimws(TeamName),
+      name_lower = tolower(gsub("\\s+", " ", name))
+    ) %>%
+    select(Season, TeamID, name, name_lower) %>%
+    distinct(Season, name_lower, .keep_all = TRUE)
+}
 
-  # Add lowercase normalized keys for matching
-  for (i in seq_len(nrow(teams))) {
-    nn <- tolower(gsub("\\s+", " ", trimws(teams$TeamName[i])))
-    if (!nn %in% names(exact)) exact[nn] <- teams$TeamID[i]
-  }
-  exact
+#' Build global name -> TeamID fallback for non-tournament teams
+build_global_name_to_id <- function(teams_df) {
+  teams <- teams_df %>% mutate(TeamName = trimws(TeamName))
+  lookup <- data.frame(
+    name = teams$TeamName,
+    name_lower = tolower(gsub("\\s+", " ", teams$TeamName)),
+    TeamID = teams$TeamID,
+    stringsAsFactors = FALSE
+  )
+  lookup %>% group_by(name_lower) %>% slice(1) %>% ungroup()
 }
 
 #' Parse schedule file to extract Season and game rows
@@ -41,23 +55,31 @@ parse_schedule <- function(path) {
   opp_col <- names(df)[which(nm %in% c("opp", "opp.", "opponent", "opp_name"))[1]]
   pf_col <- names(df)[which(nm %in% c("points_for", "pf"))[1]]
   pa_col <- names(df)[which(nm %in% c("points_against", "pa"))[1]]
+  win_col <- names(df)[which(nm %in% c("win"))[1]]
   if (is.na(team_col)) team_col <- "Team"
   if (is.na(opp_col)) opp_col <- "Opp."
   if (is.na(pf_col)) pf_col <- "Points_For"
   if (is.na(pa_col)) pa_col <- "Points_Against"
+  if (is.na(win_col)) win_col <- "Win"
   df %>%
     rename(Team = !!sym(team_col), Opp = !!sym(opp_col),
-           Points_For = !!sym(pf_col), Points_Against = !!sym(pa_col)) %>%
+           Points_For = !!sym(pf_col), Points_Against = !!sym(pa_col),
+           Win = !!sym(win_col)) %>%
     mutate(Season = season) %>%
-    select(Season, Team, Opp, Points_For, Points_Against)
+    select(Season, Team, Opp, Points_For, Points_Against, Win)
 }
 
 main <- function() {
   if (!file.exists(TEAMS_PATH)) {
     stop("MTeams.csv not found. Run 01b_build_historical_from_nishaa.R first.")
   }
+  if (!file.exists(SEEDS_PATH)) {
+    stop("MNCAATourneySeeds.csv not found. Run 01b_build_historical_from_nishaa.R first.")
+  }
   teams <- read_csv(TEAMS_PATH, show_col_types = FALSE)
-  name_to_id <- build_name_to_id(teams)
+  seeds <- read_csv(SEEDS_PATH, show_col_types = FALSE)
+  season_map <- build_season_specific_mapping(seeds, teams)
+  global_lookup <- build_global_name_to_id(teams)
 
   schedule_files <- list.files(SCHEDULES_DIR, pattern = "[0-9]{4}-[0-9]{2}_schedule\\.csv$", full.names = TRUE)
   if (length(schedule_files) == 0) {
@@ -74,33 +96,33 @@ main <- function() {
   if (length(all_games) == 0) stop("No valid schedule data.")
   games <- bind_rows(all_games)
 
-  # Resolve team names to IDs via lookup (one ID per name)
-  lookup_df <- data.frame(name = names(name_to_id), TeamID = as.integer(name_to_id), stringsAsFactors = FALSE)
-  lookup_lower <- lookup_df %>% mutate(name_lower = tolower(gsub("\\s+", " ", trimws(name))))
-  # Deduplicate by name_lower, keep first
-  lookup_lower <- lookup_lower %>% group_by(name_lower) %>% slice(1) %>% ungroup()
-
-  resolve_ids <- function(names_vec) {
-    n <- trimws(as.character(names_vec))
-    n_lower <- tolower(gsub("\\s+", " ", n))
-    # Match to lookup - ensure 1:1
-    idx <- match(n_lower, lookup_lower$name_lower)
-    ids <- lookup_lower$TeamID[idx]
-    # Fallback: exact match on original
-    unresolved <- is.na(ids)
-    if (any(unresolved)) {
-      midx <- match(n[unresolved], lookup_df$name)
-      ids[unresolved] <- lookup_df$TeamID[midx]
-    }
-    ids
-  }
-
+  # Resolve team names: season-specific first (for tournament teams), else global fallback
   games <- games %>%
     mutate(
-      TeamID = resolve_ids(Team),
-      OppID = resolve_ids(Opp),
-      WTeamID = if_else(Points_For >= Points_Against, TeamID, OppID),
-      LTeamID = if_else(Points_For >= Points_Against, OppID, TeamID),
+      Team_name_lower = tolower(gsub("\\s+", " ", trimws(Team))),
+      Opp_name_lower = tolower(gsub("\\s+", " ", trimws(Opp)))
+    )
+  team_ids <- games %>%
+    select(Season, Team_name_lower) %>%
+    distinct() %>%
+    left_join(season_map %>% select(Season, name_lower, TeamID), by = c("Season", "Team_name_lower" = "name_lower")) %>%
+    left_join(global_lookup %>% select(name_lower, TeamID) %>% rename(TeamID_global = TeamID), by = c("Team_name_lower" = "name_lower")) %>%
+    mutate(TeamID = coalesce(TeamID, TeamID_global)) %>%
+    select(Season, Team_name_lower, TeamID)
+  opp_ids <- games %>%
+    select(Season, Opp_name_lower) %>%
+    distinct() %>%
+    left_join(season_map %>% select(Season, name_lower, TeamID), by = c("Season", "Opp_name_lower" = "name_lower")) %>%
+    left_join(global_lookup %>% select(name_lower, TeamID) %>% rename(TeamID_global = TeamID), by = c("Opp_name_lower" = "name_lower")) %>%
+    mutate(OppID = coalesce(TeamID, TeamID_global)) %>%
+    select(Season, Opp_name_lower, OppID)
+  # Use Win column for winner (PF/PA may be game-total, not team perspective)
+  games <- games %>%
+    left_join(team_ids, by = c("Season", "Team_name_lower")) %>%
+    left_join(opp_ids, by = c("Season", "Opp_name_lower")) %>%
+    mutate(
+      WTeamID = if_else(as.integer(Win) == 1, TeamID, OppID),
+      LTeamID = if_else(as.integer(Win) == 1, OppID, TeamID),
       WScore = pmax(Points_For, Points_Against),
       LScore = pmin(Points_For, Points_Against)
     )

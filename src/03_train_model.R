@@ -17,7 +17,8 @@ OUTPUT_DIR <- here("output")
 # Model configuration
 TRAIN_SEASONS_END <- 2023L  # Train on seasons through this year
 TEST_SEASONS <- 2024L      # Hold out for validation (or NULL to use latest)
-FEATURE_COLS <- c("seed_diff", "winpct_diff", "rating_diff", "pf_diff")
+BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "rating_diff", "pf_diff")
+KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff")
 
 #' Train logistic regression model on matchup data
 train_model <- function(matchup_data, formula_str = NULL) {
@@ -26,7 +27,10 @@ train_model <- function(matchup_data, formula_str = NULL) {
     mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
 
   if (is.null(formula_str)) {
-    formula_str <- paste("outcome ~", paste(FEATURE_COLS, collapse = " + "))
+    all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS)
+    avail <- intersect(all_feat, names(matchup_data))
+    if (length(avail) == 0) stop("No feature columns found in matchup_data")
+    formula_str <- paste("outcome ~", paste(avail, collapse = " + "))
   }
 
   recipe <- recipe(as.formula(formula_str), data = matchup_data) %>%

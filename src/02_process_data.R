@@ -8,6 +8,7 @@ library(dplyr)
 
 # Source utilities
 source(here("src", "utils", "feature_engineering.R"))
+source(here("src", "utils", "kenpom_utils.R"))
 
 RAW_DIR <- here("data", "raw")
 RAW_EXTENDED_DIR <- here("data", "raw_extended")
@@ -94,17 +95,30 @@ main <- function() {
   win_pct <- compute_win_pct(regular_results)
   points_stats <- compute_points_stats(regular_results)
 
+  message("Loading KenPom data...")
+  kenpom_stats <- load_kenpom_stats(raw$tourney_seeds, raw$teams)
+  if (nrow(kenpom_stats) > 0) {
+    message("  KenPom: ", nrow(kenpom_stats), " team-season rows from ",
+            min(kenpom_stats$Season), "-", max(kenpom_stats$Season))
+  } else {
+    message("  No KenPom data found; model will use seed/winpct/pf features only.")
+  }
+
   message("Building matchup training data...")
   matchup_data <- build_matchup_data(
     tourney_results,
     raw$tourney_seeds,
     win_pct,
-    points_stats
+    points_stats,
+    kenpom_stats = kenpom_stats
   )
 
   message("Saving processed data...")
   write_csv(win_pct, file.path(PROC_DIR, "win_pct.csv"))
   write_csv(points_stats, file.path(PROC_DIR, "points_stats.csv"))
+  if (nrow(kenpom_stats) > 0) {
+    write_csv(kenpom_stats, file.path(PROC_DIR, "kenpom_stats.csv"))
+  }
   write_csv(matchup_data, file.path(PROC_DIR, "matchup_data.csv"))
 
   # Save seeds and slots for prediction (no processing needed)

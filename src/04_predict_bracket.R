@@ -32,6 +32,12 @@ load_for_prediction <- function() {
   seeds <- read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
   slots <- read_csv(file.path(PROC_DIR, "tourney_slots.csv"), show_col_types = FALSE)
   teams <- read_csv(file.path(PROC_DIR, "teams.csv"), show_col_types = FALSE)
+  kenpom_path <- file.path(PROC_DIR, "kenpom_stats.csv")
+  kenpom_stats <- if (file.exists(kenpom_path)) {
+    read_csv(kenpom_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
 
   list(
     model = model,
@@ -39,7 +45,8 @@ load_for_prediction <- function() {
     points_stats = points_stats,
     seeds = seeds,
     slots = slots,
-    teams = teams
+    teams = teams,
+    kenpom_stats = kenpom_stats
   )
 }
 
@@ -77,6 +84,7 @@ main <- function(season = PREDICT_SEASON, deterministic = TRUE) {
     model = data$model,
     win_pct = data$win_pct,
     points_stats = data$points_stats,
+    kenpom_stats = data$kenpom_stats,
     deterministic = deterministic
   )
 
