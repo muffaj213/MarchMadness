@@ -137,8 +137,7 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     mutate(
       PFA = replace_na(PFA, 70), PAA = replace_na(PAA, 70),
       PFB = replace_na(PFB, 70), PAB = replace_na(PAB, 70),
-      pf_diff = (PFA - PAA) - (PFB - PAB),
-      rating_diff = winpct_diff
+      pf_diff = (PFA - PAA) - (PFB - PAB)
     )
 
   # Add KenPom features if available
@@ -161,13 +160,15 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
         adj_off_diff = adj_o_A - adj_o_B,
         adj_def_diff = adj_d_B - adj_d_A,  # lower adj_d = better D, so B - A when A better
         tempo_diff = adj_t_A - adj_t_B
-      )
+      ) %>%
+      mutate(seed_winpct_interaction = seed_diff * winpct_diff)
     games <- games %>%
-      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, rating_diff, pf_diff,
+      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, seed_winpct_interaction, pf_diff,
              adjem_diff, adj_off_diff, adj_def_diff, tempo_diff)
   } else {
     games <- games %>%
-      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, rating_diff, pf_diff)
+      mutate(seed_winpct_interaction = seed_diff * winpct_diff) %>%
+      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, seed_winpct_interaction, pf_diff)
   }
   games
 }
@@ -202,13 +203,13 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
 
   seed_diff <- if (is.na(seed_a) || is.na(seed_b)) 0 else (seed_b - seed_a)
   winpct_diff <- wp_a - wp_b
-  rating_diff <- winpct_diff
   pf_diff <- margin_a - margin_b
+  seed_winpct_interaction <- seed_diff * winpct_diff
 
   out <- tibble(
     seed_diff = seed_diff,
     winpct_diff = winpct_diff,
-    rating_diff = rating_diff,
+    seed_winpct_interaction = seed_winpct_interaction,
     pf_diff = pf_diff
   )
 

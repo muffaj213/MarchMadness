@@ -9,7 +9,9 @@ packages <- c(
   "tidymodels",  # modeling workflow
   "glmnet",      # regularized regression (optional alternative)
   "here",        # project paths
-  "readxl"       # read Excel for projected bracket template
+  "readxl",      # read Excel for projected bracket template
+  "xgboost",     # gradient boosting for xgboost model
+  "ranger"       # random forest for rand_forest model
 )
 
 for (pkg in packages) {
