@@ -142,6 +142,14 @@ main <- function() {
   write_csv(raw$tourney_slots, file.path(PROC_DIR, "tourney_slots.csv"))
   write_csv(raw$teams, file.path(PROC_DIR, "teams.csv"))
 
+  # Build team name master table for ESPN/KenPom -> TeamID resolution
+  if (file.exists(here("scripts", "build_team_master.R"))) {
+    tryCatch(
+      { source(here("scripts", "build_team_master.R"), local = TRUE) },
+      error = function(e) message("  Note: Could not rebuild team_name_master.csv: ", conditionMessage(e))
+    )
+  }
+
   message("Processing complete. Output in ", PROC_DIR)
 }
 
