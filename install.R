@@ -8,7 +8,8 @@ packages <- c(
   "tidyverse",   # dplyr, tidyr, readr, purrr
   "tidymodels",  # modeling workflow
   "glmnet",      # regularized regression (optional alternative)
-  "here"         # project paths
+  "here",        # project paths
+  "readxl"       # read Excel for projected bracket template
 )
 
 for (pkg in packages) {

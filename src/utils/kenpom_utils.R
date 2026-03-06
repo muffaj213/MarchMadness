@@ -11,8 +11,11 @@ library(readr)
 #' Normalize team name for matching (trim, common substitutions)
 normalize_team_name <- function(x) {
   x <- trimws(as.character(x))
-  # Common KenPom -> Kaggle name mappings (only when Kaggle uses different name)
+  # Common KenPom/ESPN -> Kaggle name mappings (only when Kaggle uses different name)
   substitutions <- c(
+    "NC State" = "North Carolina St.",
+    "UConn" = "Connecticut",
+    "Ole Miss" = "Mississippi",
     "UNC Wilmington" = "UNCW",
     "Southern Illinois" = "S Illinois",
     "Louisiana Lafayette" = "Louisiana",
@@ -26,7 +29,26 @@ normalize_team_name <- function(x) {
     "Arkansas Little Rock" = "Little Rock",
     "Southwest Texas St." = "Texas St.",
     "Texas Pan American" = "UTRGV",
-    "Texas A&M Corpus Chris" = "Texas A&M-Corpus Christi"
+    "Texas A&M Corpus Chris" = "Texas A&M-Corpus Christi",
+    "Michigan State" = "Michigan St.",
+    "North Carolina State" = "North Carolina St.",
+    "Washington State" = "Washington St.",
+    "Ohio State" = "Ohio St.",
+    "Oregon State" = "Oregon St.",
+    "Colorado State" = "Colorado St.",
+    "Mississippi State" = "Mississippi St.",
+    "Kansas State" = "Kansas St.",
+    "Florida State" = "Florida St.",
+    "Penn State" = "Penn St.",
+    "Iowa State" = "Iowa St.",
+    "Oklahoma State" = "Oklahoma St.",
+    "Arizona State" = "Arizona St.",
+    "San Diego State" = "San Diego St.",
+    "Boise State" = "Boise St.",
+    "Kent State" = "Kent St.",
+    "Utah State" = "Utah St.",
+    "North Dakota State" = "North Dakota St.",
+    "South Dakota State" = "South Dakota St."
   )
   for (i in seq_along(substitutions)) {
     x[x == names(substitutions)[i]] <- substitutions[i]
@@ -51,15 +73,17 @@ build_season_team_lookup <- function(seeds, teams) {
 map_kenpom_to_teamids <- function(kp_df, lookup) {
   lookup_norm <- lookup %>%
     mutate(TeamNameNorm = normalize_team_name(TeamName)) %>%
+    distinct(Season, TeamNameNorm, .keep_all = TRUE) %>%
     select(Season, TeamID, TeamNameNorm)
   kp_norm <- kp_df %>%
-    mutate(TeamNorm = normalize_team_name(Team))
-  # Join on exact match
+    mutate(TeamNorm = normalize_team_name(Team), .row = row_number())
+  # Join on exact match (one-to-one)
   matched <- kp_norm %>%
     left_join(
       lookup_norm,
       by = c("Season", "TeamNorm" = "TeamNameNorm")
-    )
+    ) %>%
+    arrange(.row)
   matched$TeamID
 }
 
@@ -84,10 +108,19 @@ load_github_kenpom <- function(kenpom_path, lookup) {
     )
   # Map Team -> TeamID per season (vectorized)
   kp$TeamID <- map_kenpom_to_teamids(kp, lookup)
+  # Win pct from Wins / (Wins + Losses)
+  kp <- kp %>%
+    mutate(
+      Wins_num = suppressWarnings(as.numeric(Wins)),
+      Losses_num = suppressWarnings(as.numeric(Losses)),
+      Games = Wins_num + Losses_num,
+      win_pct = if_else(Games > 0, Wins_num / Games, 0.5)
+    )
   kp %>%
     filter(!is.na(TeamID)) %>%
-    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t)
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
 }
+
 
 #' Load KenPom Barttorvik data (KADJ EM, KADJ O, KADJ D, KADJ T) for 2024+
 load_barttorvik_kenpom <- function(bt_path, lookup) {
@@ -112,10 +145,23 @@ load_barttorvik_kenpom <- function(bt_path, lookup) {
       adj_d = as.numeric(.data[[d_col]]),
       adj_t = as.numeric(.data[[t_col]])
     )
+  # Win pct from W and L columns (W / (W + L))
+  w_col <- if ("W" %in% names(bt)) "W" else names(bt)[grepl("^Wins$", names(bt), ignore.case = TRUE)][1]
+  l_col <- if ("L" %in% names(bt)) "L" else names(bt)[grepl("^Losses$", names(bt), ignore.case = TRUE)][1]
+  games_col <- if ("GAMES" %in% names(bt)) "GAMES" else NULL
+  if (is.na(w_col)) w_col <- "W"
+  if (is.na(l_col)) l_col <- "L"
+  bt <- bt %>%
+    mutate(
+      Wins_num = suppressWarnings(as.numeric(if (w_col %in% names(bt)) .data[[w_col]] else 0)),
+      Losses_num = suppressWarnings(as.numeric(if (l_col %in% names(bt)) .data[[l_col]] else 0)),
+      Games = if (!is.null(games_col) && games_col %in% names(bt)) as.numeric(.data[[games_col]]) else Wins_num + Losses_num,
+      win_pct = if_else(Games > 0, Wins_num / Games, 0.5)
+    )
   bt$TeamID <- map_kenpom_to_teamids(bt, lookup)
   bt %>%
     filter(!is.na(TeamID)) %>%
-    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t)
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
 }
 
 #' Ensure KenPom CSV exists; download from GitHub if missing
@@ -133,8 +179,22 @@ ensure_kenpom_downloaded <- function(kenpom_dir = NULL) {
 }
 
 #' Load all KenPom data, merge GitHub + Barttorvik, return Season/TeamID stats
-load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path = NULL) {
-  lookup <- build_season_team_lookup(seeds, teams)
+#' @param seeds Tourney seeds (Season, Seed, TeamID)
+#' @param teams Teams (TeamID, TeamName)
+#' @param projected_seeds_dir If provided, also load seeds_projected_*.csv to enable KenPom mapping for future seasons (e.g. 2025)
+load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path = NULL, projected_seeds_dir = NULL) {
+  seeds_aug <- seeds
+  if (is.null(projected_seeds_dir)) projected_seeds_dir <- here::here("data", "bracket")
+  proj_files <- list.files(projected_seeds_dir, pattern = "^seeds_projected_[0-9]+\\.csv$", full.names = TRUE)
+  for (f in proj_files) {
+    if (file.exists(f)) {
+      proj <- tryCatch(read_csv(f, show_col_types = FALSE), error = function(e) NULL)
+      if (!is.null(proj) && nrow(proj) > 0 && all(c("Season", "TeamID") %in% names(proj))) {
+        seeds_aug <- bind_rows(seeds_aug, proj %>% select(Season, Seed, TeamID) %>% distinct(Season, TeamID, .keep_all = TRUE))
+      }
+    }
+  }
+  lookup <- build_season_team_lookup(seeds_aug, teams)
   if (is.null(kenpom_dir)) kenpom_dir <- here::here("data", "raw_kenpom")
   ensure_kenpom_downloaded(kenpom_dir)
   kp_github <- load_github_kenpom(file.path(kenpom_dir, "kenpom.csv"), lookup)

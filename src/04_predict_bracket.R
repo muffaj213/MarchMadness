@@ -19,7 +19,8 @@ BRACKET_DIR <- here("data", "bracket")
 PREDICT_SEASON <- 2024L
 
 #' Load model and processed data
-load_for_prediction <- function() {
+#' @param seeds_file Optional path to seeds CSV (Season, Seed, TeamID). If NULL, use tourney_seeds.csv.
+load_for_prediction <- function(seeds_file = NULL) {
   model_path <- file.path(MODELS_DIR, "bracket_model.rds")
   if (!file.exists(model_path)) {
     stop("Model not found. Run 03_train_model.R first.")
@@ -29,7 +30,12 @@ load_for_prediction <- function() {
 
   win_pct <- read_csv(file.path(PROC_DIR, "win_pct.csv"), show_col_types = FALSE)
   points_stats <- read_csv(file.path(PROC_DIR, "points_stats.csv"), show_col_types = FALSE)
-  seeds <- read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
+  seeds <- if (is.null(seeds_file)) {
+    read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
+  } else {
+    if (!file.exists(seeds_file)) stop("Seeds file not found: ", seeds_file)
+    read_csv(seeds_file, show_col_types = FALSE)
+  }
   slots <- read_csv(file.path(PROC_DIR, "tourney_slots.csv"), show_col_types = FALSE)
   teams <- read_csv(file.path(PROC_DIR, "teams.csv"), show_col_types = FALSE)
   kenpom_path <- file.path(PROC_DIR, "kenpom_stats.csv")
@@ -37,6 +43,30 @@ load_for_prediction <- function() {
     read_csv(kenpom_path, show_col_types = FALSE)
   } else {
     NULL
+  }
+
+  # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
+  seeds_needed <- seeds %>% distinct(Season, TeamID)
+  win_pct_have <- win_pct %>% distinct(Season, TeamID)
+  missing <- seeds_needed %>% anti_join(win_pct_have, by = c("Season", "TeamID"))
+  if (nrow(missing) > 0) {
+    source(here("src", "utils", "kenpom_utils.R"), local = TRUE)
+    kp <- load_kenpom_stats(seeds, teams)
+    if (nrow(kp) > 0 && "win_pct" %in% names(kp)) {
+      kp_win <- kp %>%
+        filter(!is.na(win_pct), (Season %in% missing$Season)) %>%
+        mutate(
+          Wins = if ("Wins" %in% names(.)) Wins else round(win_pct * 32),
+          Losses = if ("Losses" %in% names(.)) Losses else round((1 - win_pct) * 32),
+          Games = if ("Games" %in% names(.)) Games else pmax(1L, as.integer(Wins + Losses))
+        ) %>%
+        select(Season, TeamID, WinPct = win_pct, Wins, Losses, Games)
+      to_add <- kp_win %>% inner_join(missing, by = c("Season", "TeamID"))
+      if (nrow(to_add) > 0) {
+        win_pct <- bind_rows(win_pct, to_add)
+        message("Filled ", nrow(to_add), " win_pct rows from KenPom for missing season(s)")
+      }
+    }
   }
 
   list(
@@ -51,11 +81,15 @@ load_for_prediction <- function() {
 }
 
 #' Run bracket simulation
-main <- function(season = PREDICT_SEASON, deterministic = TRUE) {
+#' @param season Season year
+#' @param seeds_file Optional path to seeds CSV for projected bracket. If NULL, use tourney_seeds.csv.
+#' @param use_projected_output If TRUE, write to bracket_prediction_projected_YEAR.csv
+#' @param deterministic If TRUE, pick higher-probability team; if FALSE, sample
+main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
   message("Loading model and data...")
-  data <- load_for_prediction()
+  data <- load_for_prediction(seeds_file = seeds_file)
 
   # Filter seeds and slots for the season
   # Some datasets have slots per season; if not, use all slots
@@ -106,12 +140,14 @@ main <- function(season = PREDICT_SEASON, deterministic = TRUE) {
   message("Predicted champion: ", champ_name, " (TeamID ", result$champion, ")")
 
   # Save outputs
-  out_file <- file.path(OUTPUT_DIR, paste0("bracket_prediction_", season, ".csv"))
+  out_base <- if (use_projected_output) paste0("bracket_prediction_projected_", season) else paste0("bracket_prediction_", season)
+  out_file <- file.path(OUTPUT_DIR, paste0(out_base, ".csv"))
   write_csv(game_results, out_file)
   message("Bracket predictions saved to ", out_file)
 
   # Save champion
-  champ_file <- file.path(OUTPUT_DIR, paste0("champion_", season, ".txt"))
+  champ_base <- if (use_projected_output) paste0("champion_projected_", season) else paste0("champion_", season)
+  champ_file <- file.path(OUTPUT_DIR, paste0(champ_base, ".txt"))
   writeLines(c(
     paste("Season:", season),
     paste("Predicted Champion:", champ_name),
@@ -126,4 +162,6 @@ main <- function(season = PREDICT_SEASON, deterministic = TRUE) {
   ))
 }
 
-main()
+if (!isTRUE(getOption("bracket.skip_main"))) {
+  main()
+}

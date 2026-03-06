@@ -100,6 +100,22 @@ main <- function() {
   if (nrow(kenpom_stats) > 0) {
     message("  KenPom: ", nrow(kenpom_stats), " team-season rows from ",
             min(kenpom_stats$Season), "-", max(kenpom_stats$Season))
+    # Fill in missing win_pct from KenPom (e.g. for 2025 when no regular-season data)
+    if ("win_pct" %in% names(kenpom_stats)) {
+      kp_win <- kenpom_stats %>%
+        filter(!is.na(win_pct)) %>%
+        mutate(
+          Wins = if ("Wins" %in% names(.)) Wins else round(win_pct * 32),
+          Losses = if ("Losses" %in% names(.)) Losses else round((1 - win_pct) * 32),
+          Games = if ("Games" %in% names(.)) Games else Wins + Losses
+        ) %>%
+        select(Season, TeamID, WinPct = win_pct, Wins, Losses, Games)
+      missing <- kp_win %>% anti_join(win_pct, by = c("Season", "TeamID"))
+      if (nrow(missing) > 0) {
+        win_pct <- bind_rows(win_pct, missing)
+        message("  Filled ", nrow(missing), " win_pct rows from KenPom for missing seasons/teams")
+      }
+    }
   } else {
     message("  No KenPom data found; model will use seed/winpct/pf features only.")
   }
