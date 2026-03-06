@@ -44,6 +44,15 @@ if (!has_raw && !has_extended) {
   stop("Required data files missing. Run 00_create_sample_data.R, 01_download_data.R, or 01b (with raw_nishaa) into data/raw/ or data/raw_extended/")
 }
 
+# Step 1c (optional): Fetch KenPom gap (2018-2023) via toRvik
+if (file.exists(here::here("scripts", "fetch_kenpom_gap.R"))) {
+  message("\n--- Step 1c: Fetch KenPom gap (2018-2023) ---")
+  tryCatch(
+    { source(here::here("scripts", "fetch_kenpom_gap.R")) },
+    error = function(e) message("  KenPom gap fetch skipped: ", conditionMessage(e))
+  )
+}
+
 # Step 2: Process data
 message("\n--- Step 2: Process data ---")
 source(here::here("src", "02_process_data.R"))

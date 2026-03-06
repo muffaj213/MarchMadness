@@ -18,4 +18,7 @@ NCAA Men's Basketball Tournament bracket prediction model in R.
 
 ## Features
 
-Model uses: seed differential, win percentage, points margin, and **KenPom** metrics (AdjEM, AdjO, AdjD, tempo). KenPom data from [jfinocchiaro/marchmadness](https://github.com/jfinocchiaro/marchmadness) (2002-2017) and Barttorvik (2024-2025 when available).
+Model uses: seed differential, win percentage, points margin, and **KenPom** metrics (AdjEM, AdjO, AdjD, tempo). KenPom data from:
+- [jfinocchiaro/marchmadness](https://github.com/jfinocchiaro/marchmadness) (2002-2017)
+- toRvik/Barttorvik (2018-2023) — run `Rscript scripts/fetch_kenpom_gap.R` to fill the gap
+- Barttorvik (2024-2025 when available)

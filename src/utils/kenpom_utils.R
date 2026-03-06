@@ -164,6 +164,18 @@ load_barttorvik_kenpom <- function(bt_path, lookup) {
     select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
 }
 
+#' Load KenPom gap file (2018-2023 from toRvik/bart_ratings)
+#' Expected columns: Season, Team, adj_em, adj_o, adj_d, adj_t, win_pct, Wins, Losses, Games
+load_kenpom_gap <- function(gap_path, lookup) {
+  if (!file.exists(gap_path)) return(tibble())
+  gap <- read_csv(gap_path, show_col_types = FALSE)
+  if (nrow(gap) == 0) return(tibble())
+  gap$TeamID <- map_kenpom_to_teamids(gap, lookup)
+  gap %>%
+    filter(!is.na(TeamID)) %>%
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins, Losses, Games)
+}
+
 #' Ensure KenPom CSV exists; download from GitHub if missing
 ensure_kenpom_downloaded <- function(kenpom_dir = NULL) {
   if (is.null(kenpom_dir)) kenpom_dir <- here::here("data", "raw_kenpom")
@@ -198,13 +210,17 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
   if (is.null(kenpom_dir)) kenpom_dir <- here::here("data", "raw_kenpom")
   ensure_kenpom_downloaded(kenpom_dir)
   kp_github <- load_github_kenpom(file.path(kenpom_dir, "kenpom.csv"), lookup)
+  kp_gap <- load_kenpom_gap(file.path(kenpom_dir, "kenpom_gap_2018_2023.csv"), lookup)
   if (is.null(barttorvik_path)) {
     barttorvik_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
   }
   kp_bt <- load_barttorvik_kenpom(barttorvik_path, lookup)
-  # Combine; Barttorvik overwrites for overlapping seasons
+  # Combine: GitHub (2002-2017) + gap (2018-2023) + Barttorvik (2024+)
+  # Later sources overwrite for overlapping seasons
+  all_seasons <- unique(c(kp_gap$Season, kp_bt$Season))
   bind_rows(
-    kp_github %>% filter(!(Season %in% unique(kp_bt$Season))),
+    kp_github %>% filter(!(Season %in% all_seasons)),
+    kp_gap,
     kp_bt
   ) %>%
     arrange(Season, TeamID)
