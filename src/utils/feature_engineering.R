@@ -37,6 +37,39 @@ compute_win_pct <- function(regular_results) {
     select(Season, TeamID, WinPct, Wins, Losses, Games)
 }
 
+#' Compute late-season win percentage (last N days or last N games)
+#' DayNum 100+ typically indicates late-season games.
+#'
+#' @param regular_results Data frame with WTeamID, LTeamID, Season, DayNum
+#' @param day_cutoff Include games with DayNum >= this (e.g., 90 = roughly last month)
+#' @return Data frame with TeamID, Season, LateWinPct, LateWins, LateLosses, LateGames
+compute_late_win_pct <- function(regular_results, day_cutoff = 90) {
+  if (!"DayNum" %in% names(regular_results)) {
+    return(tibble(Season = integer(), TeamID = integer(), LateWinPct = numeric(),
+                  LateWins = integer(), LateLosses = integer(), LateGames = integer()))
+  }
+  late <- regular_results %>% filter(DayNum >= day_cutoff)
+  if (nrow(late) == 0) {
+    return(tibble(Season = integer(), TeamID = integer(), LateWinPct = numeric(),
+                  LateWins = integer(), LateLosses = integer(), LateGames = integer()))
+  }
+  wins <- late %>%
+    count(Season, WTeamID, name = "LateWins") %>%
+    rename(TeamID = WTeamID)
+  losses <- late %>%
+    count(Season, LTeamID, name = "LateLosses") %>%
+    rename(TeamID = LTeamID)
+  wins %>%
+    full_join(losses, by = c("Season", "TeamID")) %>%
+    mutate(
+      LateWins = replace_na(LateWins, 0),
+      LateLosses = replace_na(LateLosses, 0),
+      LateGames = LateWins + LateLosses,
+      LateWinPct = if_else(LateGames > 0, LateWins / LateGames, NA_real_)
+    ) %>%
+    select(Season, TeamID, LateWinPct, LateWins, LateLosses, LateGames)
+}
+
 #' Compute points-for and points-against per game for each team
 #'
 #' @param regular_results Data frame with WTeamID, LTeamID, WScore, LScore, Season
@@ -71,13 +104,18 @@ compute_points_stats <- function(regular_results) {
 #' For each tournament game, creates one row with features and outcome.
 #' outcome = 1 if WTeamID (winner) is "team_a" in the row.
 #'
+#' Note on pf_diff: Uses regular-season points margin. If raw_extended has no regular
+#' data for a season (e.g. 2008-2013), both teams get default 70,70 -> pf_diff=0.
+#' Ensure MRegularSeasonCompactResults covers all tournament seasons.
+#'
 #' @param tourney_results Tournament results (WTeamID, LTeamID, Season)
 #' @param seeds Seeds data (Season, Seed, TeamID)
 #' @param win_pct Win percentage by team/season
 #' @param points_stats Points stats by team/season
 #' @param kenpom_stats Optional KenPom stats (Season, TeamID, adj_em, adj_o, adj_d, adj_t)
+#' @param late_win_pct Optional late-season win pct (Season, TeamID, LateWinPct)
 #' @return Data frame with Season, TeamA, TeamB, seed_diff, winpct_diff, etc., outcome
-build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL) {
+build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL) {
   # Add seed numbers
   seeds <- seeds %>%
     mutate(SeedNum = parse_seed_number(Seed))
@@ -107,9 +145,13 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     ) %>%
     select(Season, TeamA, TeamB, WTeamID, LTeamID, outcome, SeedA, SeedB)
 
-  # Seed diff: positive = TeamA (lower seed number) is better
+  # Seed features: diff (positive = TeamA better), squared, sum
   games <- games %>%
-    mutate(seed_diff = SeedB - SeedA)
+    mutate(
+      seed_diff = SeedB - SeedA,
+      seed_diff_sq = seed_diff^2,
+      seed_sum = SeedA + SeedB
+    )
 
   # Add win pct and points stats (use 0.5 / 0 when no regular-season data)
   games <- games %>%
@@ -125,7 +167,30 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       WinPctA = replace_na(WinPctA, 0.5),
       WinPctB = replace_na(WinPctB, 0.5),
       winpct_diff = WinPctA - WinPctB
-    ) %>%
+    )
+
+  # Add late-season win pct if available
+  if (!is.null(late_win_pct) && nrow(late_win_pct) > 0 && "LateWinPct" %in% names(late_win_pct)) {
+    games <- games %>%
+      left_join(
+        late_win_pct %>% select(Season, TeamA = TeamID, LateWinPctA = LateWinPct),
+        by = c("Season", "TeamA")
+      ) %>%
+      left_join(
+        late_win_pct %>% select(Season, TeamB = TeamID, LateWinPctB = LateWinPct),
+        by = c("Season", "TeamB")
+      ) %>%
+      mutate(
+        LateWinPctA = replace_na(LateWinPctA, 0.5),
+        LateWinPctB = replace_na(LateWinPctB, 0.5),
+        late_winpct_diff = LateWinPctA - LateWinPctB
+      ) %>%
+      select(-LateWinPctA, -LateWinPctB)
+  } else {
+    games <- games %>% mutate(late_winpct_diff = 0)
+  }
+
+  games <- games %>%
     left_join(
       points_stats %>% select(Season, TeamA = TeamID, PFA = PF_per_game, PAA = PA_per_game),
       by = c("Season", "TeamA")
@@ -163,12 +228,13 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       ) %>%
       mutate(seed_winpct_interaction = seed_diff * winpct_diff)
     games <- games %>%
-      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, seed_winpct_interaction, pf_diff,
-             adjem_diff, adj_off_diff, adj_def_diff, tempo_diff)
+      select(Season, TeamA, TeamB, outcome, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
+             seed_winpct_interaction, pf_diff, adjem_diff, adj_off_diff, adj_def_diff, tempo_diff)
   } else {
     games <- games %>%
       mutate(seed_winpct_interaction = seed_diff * winpct_diff) %>%
-      select(Season, TeamA, TeamB, outcome, seed_diff, winpct_diff, seed_winpct_interaction, pf_diff)
+      select(Season, TeamA, TeamB, outcome, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
+             seed_winpct_interaction, pf_diff)
   }
   games
 }
@@ -182,8 +248,9 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 #' @param win_pct Win percentages
 #' @param points_stats Points statistics
 #' @param kenpom_stats Optional KenPom stats
+#' @param late_win_pct Optional late-season win pct (Season, TeamID, LateWinPct)
 #' @return Data frame with one row of features
-compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL) {
+compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   seed_a <- seeds %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
@@ -205,10 +272,27 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
   winpct_diff <- wp_a - wp_b
   pf_diff <- margin_a - margin_b
   seed_winpct_interaction <- seed_diff * winpct_diff
+  seed_diff_sq <- seed_diff^2
+  seed_sum <- if (is.na(seed_a) || is.na(seed_b)) NA_integer_ else (seed_a + seed_b)
+  seed_sum <- if (is.na(seed_sum)) 17L else seed_sum  # default mid-range
+
+  # Late-season win pct (needs late_win_pct passed; for now use 0.5 each -> diff 0)
+  late_wp_a <- if (!is.null(late_win_pct) && "LateWinPct" %in% names(late_win_pct)) {
+    x <- late_win_pct %>% filter(Season == season, TeamID == team_a) %>% pull(LateWinPct)
+    if (length(x) > 0 && !is.na(x[1])) x[1] else 0.5
+  } else 0.5
+  late_wp_b <- if (!is.null(late_win_pct) && "LateWinPct" %in% names(late_win_pct)) {
+    x <- late_win_pct %>% filter(Season == season, TeamID == team_b) %>% pull(LateWinPct)
+    if (length(x) > 0 && !is.na(x[1])) x[1] else 0.5
+  } else 0.5
+  late_winpct_diff <- late_wp_a - late_wp_b
 
   out <- tibble(
     seed_diff = seed_diff,
+    seed_diff_sq = seed_diff_sq,
+    seed_sum = seed_sum,
     winpct_diff = winpct_diff,
+    late_winpct_diff = late_winpct_diff,
     seed_winpct_interaction = seed_winpct_interaction,
     pf_diff = pf_diff
   )

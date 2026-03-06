@@ -38,10 +38,11 @@ get_team_for_seed <- function(seed_id, seeds_df, season) {
 #' @param win_pct Win percentages
 #' @param points_stats Points statistics
 #' @param kenpom_stats Optional KenPom stats (Season, TeamID, adj_em, adj_o, adj_d, adj_t)
+#' @param late_win_pct Optional late-season win pct (Season, TeamID, LateWinPct)
 #' @param deterministic If TRUE, pick higher-probability team; if FALSE, sample
 #' @return List with slot_winners, game_results, champion
 simulate_bracket <- function(season, slots_df, seeds_df, model,
-                            win_pct, points_stats, kenpom_stats = NULL, deterministic = FALSE) {
+                            win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL, deterministic = FALSE) {
   # Load feature engineering (compute_matchup_features)
   fe_path <- here::here("src", "utils", "feature_engineering.R")
   if (file.exists(fe_path)) source(fe_path, local = TRUE)
@@ -77,7 +78,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
 
     if (is.na(team_a) || is.na(team_b)) next
 
-    features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats)
+    features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct)
 
     pred <- tryCatch(
       {

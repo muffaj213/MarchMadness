@@ -37,17 +37,33 @@ read_raw_data <- function() {
          paste(basename(missing), collapse = ", "))
   }
 
-  # When using raw_extended, only use regular from raw_extended (never raw - different TeamIDs)
-  regular_path <- if (dir.exists(RAW_EXTENDED_DIR)) {
-    file.path(RAW_EXTENDED_DIR, REGULAR_FILE)
-  } else {
-    file.path(RAW_DIR, REGULAR_FILE)
-  }
-  regular_results <- if (file.exists(regular_path)) {
-    read_csv(regular_path, show_col_types = FALSE)
+  # Prefer raw_extended; fill missing seasons from raw if raw_extended lacks them
+  reg_ext_path <- file.path(RAW_EXTENDED_DIR, REGULAR_FILE)
+  reg_raw_path <- file.path(RAW_DIR, REGULAR_FILE)
+  regular_ext <- if (file.exists(reg_ext_path)) {
+    read_csv(reg_ext_path, show_col_types = FALSE)
   } else {
     tibble(Season = integer(), DayNum = integer(), WTeamID = integer(), LTeamID = integer(),
           WScore = integer(), LScore = integer())
+  }
+  regular_raw <- if (file.exists(reg_raw_path) && dir.exists(RAW_DIR)) {
+    read_csv(reg_raw_path, show_col_types = FALSE)
+  } else {
+    tibble(Season = integer(), DayNum = integer(), WTeamID = integer(), LTeamID = integer(),
+          WScore = integer(), LScore = integer())
+  }
+  ext_seasons <- unique(regular_ext$Season)
+  raw_only <- regular_raw %>% filter(!Season %in% ext_seasons)
+  regular_results <- if (nrow(raw_only) > 0 && nrow(regular_ext) > 0) {
+    bind_rows(regular_ext, raw_only)
+  } else if (nrow(regular_ext) > 0) {
+    regular_ext
+  } else {
+    regular_raw
+  }
+  if (nrow(raw_only) > 0) {
+    message("  Merged ", nrow(raw_only), " regular-season rows from raw for seasons ",
+            paste(range(raw_only$Season), collapse = "-"))
   }
   if (nrow(regular_results) == 0) {
     message("No regular season data; using seed-based features only for those seasons.")
@@ -94,6 +110,10 @@ main <- function() {
   message("Computing team statistics...")
   win_pct <- compute_win_pct(regular_results)
   points_stats <- compute_points_stats(regular_results)
+  late_win_pct <- compute_late_win_pct(regular_results, day_cutoff = 90)
+  if (nrow(late_win_pct) > 0) {
+    message("  Late-season win pct: ", nrow(late_win_pct), " team-season rows (DayNum >= 90)")
+  }
 
   message("Loading KenPom data...")
   kenpom_stats <- load_kenpom_stats(raw$tourney_seeds, raw$teams)
@@ -126,12 +146,16 @@ main <- function() {
     raw$tourney_seeds,
     win_pct,
     points_stats,
-    kenpom_stats = kenpom_stats
+    kenpom_stats = kenpom_stats,
+    late_win_pct = late_win_pct
   )
 
   message("Saving processed data...")
   write_csv(win_pct, file.path(PROC_DIR, "win_pct.csv"))
   write_csv(points_stats, file.path(PROC_DIR, "points_stats.csv"))
+  if (nrow(late_win_pct) > 0) {
+    write_csv(late_win_pct, file.path(PROC_DIR, "late_win_pct.csv"))
+  }
   if (nrow(kenpom_stats) > 0) {
     write_csv(kenpom_stats, file.path(PROC_DIR, "kenpom_stats.csv"))
   }

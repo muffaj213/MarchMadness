@@ -19,7 +19,8 @@ TRAIN_SEASONS_END <- 2023L  # Train on seasons through this year
 TEST_SEASONS <- 2024L       # Hold out for validation
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
-BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "seed_winpct_interaction", "pf_diff")
+BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff",
+                       "seed_winpct_interaction", "pf_diff")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff")
 
 #' Build recipe and workflow for a given model type
