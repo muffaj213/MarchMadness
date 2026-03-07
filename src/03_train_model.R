@@ -22,8 +22,9 @@ TEST_SEASONS <- 2024L       # Hold out for validation
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff",
-                       "seed_winpct_interaction", "pf_diff")
-KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff")
+                       "seed_winpct_interaction", "pf_diff", "round", "h2h_team_a_winpct", "sos_diff", "rest_diff")
+KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff",
+                         "adjem_seed_interaction", "seed_latewinpct_interaction")
 
 # -----------------------------------------------------------------------------
 # BASELINE: Fixed parameters (original setup)

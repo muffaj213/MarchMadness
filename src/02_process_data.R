@@ -140,6 +140,14 @@ main <- function() {
     message("  No KenPom data found; model will use seed/winpct/pf features only.")
   }
 
+  message("Computing head-to-head, SOS, rest...")
+  head_to_head <- compute_head_to_head(regular_results)
+  sos_stats <- compute_sos(regular_results, win_pct)
+  rest_stats <- compute_rest(regular_results, tourney_start_day = 134L)
+  if (nrow(head_to_head) > 0) message("  Head-to-head: ", nrow(head_to_head), " team-pair rows")
+  if (nrow(sos_stats) > 0) message("  SOS: ", nrow(sos_stats), " team-season rows")
+  if (nrow(rest_stats) > 0) message("  Rest: ", nrow(rest_stats), " team-season rows")
+
   message("Building matchup training data...")
   matchup_data <- build_matchup_data(
     tourney_results,
@@ -147,7 +155,10 @@ main <- function() {
     win_pct,
     points_stats,
     kenpom_stats = kenpom_stats,
-    late_win_pct = late_win_pct
+    late_win_pct = late_win_pct,
+    head_to_head = head_to_head,
+    sos_stats = sos_stats,
+    rest_stats = rest_stats
   )
 
   message("Saving processed data...")
@@ -160,6 +171,9 @@ main <- function() {
     write_csv(kenpom_stats, file.path(PROC_DIR, "kenpom_stats.csv"))
   }
   write_csv(matchup_data, file.path(PROC_DIR, "matchup_data.csv"))
+  if (nrow(head_to_head) > 0) write_csv(head_to_head, file.path(PROC_DIR, "head_to_head.csv"))
+  if (nrow(sos_stats) > 0) write_csv(sos_stats, file.path(PROC_DIR, "sos_stats.csv"))
+  if (nrow(rest_stats) > 0) write_csv(rest_stats, file.path(PROC_DIR, "rest_stats.csv"))
 
   # Save seeds and slots for prediction (no processing needed)
   write_csv(raw$tourney_seeds, file.path(PROC_DIR, "tourney_seeds.csv"))

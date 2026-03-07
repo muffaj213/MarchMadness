@@ -78,7 +78,10 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
 
     if (is.na(team_a) || is.na(team_b)) next
 
-    features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct)
+    # Derive round from slot (R1 -> 1, R2 -> 2, ..., R6 -> 6)
+    round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
+    if (is.na(round_num)) round_num <- 1L
+    features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct, round = round_num)
 
     pred <- tryCatch(
       {
