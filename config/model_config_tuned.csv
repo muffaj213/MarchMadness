@@ -1,0 +1,13 @@
+Config_Type,Model,Parameter,Value
+tuned,glm,penalty,1e-10
+tuned,glm,mixture,0
+tuned,glm,.config,pre0_mod1_post0
+tuned,xgboost,trees,157
+tuned,xgboost,min_n,2
+tuned,xgboost,tree_depth,7
+tuned,xgboost,learn_rate,0.0315357365428131
+tuned,xgboost,.config,pre0_mod02_post0
+tuned,rand_forest,mtry,4
+tuned,rand_forest,trees,702
+tuned,rand_forest,min_n,4
+tuned,rand_forest,.config,pre0_mod04_post0

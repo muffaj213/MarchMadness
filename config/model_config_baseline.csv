@@ -1,0 +1,11 @@
+Config_Type,Model,Parameter,Value
+baseline,glm,penalty,0
+baseline,glm,mixture,0
+baseline,glm,engine,glm
+baseline,xgboost,trees,200
+baseline,xgboost,min_n,5
+baseline,xgboost,learn_rate,0.1
+baseline,xgboost,engine,xgboost
+baseline,rand_forest,trees,500
+baseline,rand_forest,min_n,5
+baseline,rand_forest,engine,ranger
