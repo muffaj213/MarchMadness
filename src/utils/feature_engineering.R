@@ -247,13 +247,14 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     )
 
   # Add win pct and points stats (use 0.5 / 0 when no regular-season data)
+  win_pct_dedup <- win_pct %>% distinct(Season, TeamID, .keep_all = TRUE)
   games <- games %>%
     left_join(
-      win_pct %>% select(Season, TeamA = TeamID, WinPctA = WinPct),
+      win_pct_dedup %>% select(Season, TeamA = TeamID, WinPctA = WinPct),
       by = c("Season", "TeamA")
     ) %>%
     left_join(
-      win_pct %>% select(Season, TeamB = TeamID, WinPctB = WinPct),
+      win_pct_dedup %>% select(Season, TeamB = TeamID, WinPctB = WinPct),
       by = c("Season", "TeamB")
     ) %>%
     mutate(
@@ -342,13 +343,14 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 
   # Add KenPom features if available
   if (!is.null(kenpom_stats) && nrow(kenpom_stats) > 0) {
+    kenpom_dedup <- kenpom_stats %>% distinct(Season, TeamID, .keep_all = TRUE)
     games <- games %>%
       left_join(
-        kenpom_stats %>% select(Season, TeamA = TeamID, adj_em_A = adj_em, adj_o_A = adj_o, adj_d_A = adj_d, adj_t_A = adj_t),
+        kenpom_dedup %>% select(Season, TeamA = TeamID, adj_em_A = adj_em, adj_o_A = adj_o, adj_d_A = adj_d, adj_t_A = adj_t),
         by = c("Season", "TeamA")
       ) %>%
       left_join(
-        kenpom_stats %>% select(Season, TeamB = TeamID, adj_em_B = adj_em, adj_o_B = adj_o, adj_d_B = adj_d, adj_t_B = adj_t),
+        kenpom_dedup %>% select(Season, TeamB = TeamID, adj_em_B = adj_em, adj_o_B = adj_o, adj_d_B = adj_d, adj_t_B = adj_t),
         by = c("Season", "TeamB")
       ) %>%
       mutate(
