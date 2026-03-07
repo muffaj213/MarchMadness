@@ -104,7 +104,8 @@ load_github_kenpom <- function(kenpom_path, lookup) {
       adj_o = as.numeric(AdjustO),
       adj_d = as.numeric(AdjustD),
       adj_t = as.numeric(AdjustT),
-      adj_em = as.numeric(Pyth)
+      adj_em = as.numeric(Pyth),
+      luck = suppressWarnings(as.numeric(if ("Luck" %in% names(.)) Luck else NA_real_))
     )
   # Map Team -> TeamID per season (vectorized)
   kp$TeamID <- map_kenpom_to_teamids(kp, lookup)
@@ -118,7 +119,7 @@ load_github_kenpom <- function(kenpom_path, lookup) {
     )
   kp %>%
     filter(!is.na(TeamID)) %>%
-    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, luck, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
 }
 
 
@@ -161,7 +162,8 @@ load_barttorvik_kenpom <- function(bt_path, lookup) {
   bt$TeamID <- map_kenpom_to_teamids(bt, lookup)
   bt %>%
     filter(!is.na(TeamID)) %>%
-    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
+    mutate(luck = NA_real_) %>%
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, luck, win_pct, Wins = Wins_num, Losses = Losses_num, Games)
 }
 
 #' Load KenPom gap file (2018-2023 from toRvik/bart_ratings)
@@ -173,7 +175,8 @@ load_kenpom_gap <- function(gap_path, lookup) {
   gap$TeamID <- map_kenpom_to_teamids(gap, lookup)
   gap %>%
     filter(!is.na(TeamID)) %>%
-    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, win_pct, Wins, Losses, Games)
+    mutate(luck = NA_real_) %>%
+    select(Season, TeamID, adj_em, adj_o, adj_d, adj_t, luck, win_pct, Wins, Losses, Games)
 }
 
 #' Ensure KenPom CSV exists; download from GitHub if missing
@@ -224,4 +227,93 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
     kp_bt
   ) %>%
     arrange(Season, TeamID)
+}
+
+#' Load home/away win rates from College basketball 2012-24.csv (atoziye)
+#' Expected columns: Year, Team, Home win rate, Away win rate
+#' @return Tibble with Season, TeamID, home_win_rate, away_win_rate
+load_home_away_win_rates <- function(path = NULL, lookup) {
+  if (is.null(path)) path <- here::here("data", "raw_atoziye", "College basketball 2012-24.csv")
+  if (!file.exists(path)) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  if (nrow(df) == 0) return(tibble())
+  if ("Year" %in% names(df)) df <- df %>% rename(Season = Year)
+  if ("YEAR" %in% names(df) && !"Season" %in% names(df)) df <- df %>% rename(Season = YEAR)
+  if ("TEAM" %in% names(df) && !"Team" %in% names(df)) df <- df %>% rename(Team = TEAM)
+  if (!"Team" %in% names(df)) return(tibble())
+  hr <- names(df)[grep("Home.*win|home.*win", names(df), ignore.case = TRUE)][1]
+  ar <- names(df)[grep("Away.*win|away.*win", names(df), ignore.case = TRUE)][1]
+  if (is.na(hr) || is.na(ar)) return(tibble())
+  df$TeamID <- map_kenpom_to_teamids(df, lookup)
+  df %>%
+    filter(!is.na(TeamID)) %>%
+    mutate(
+      home_win_rate = suppressWarnings(as.numeric(!!sym(hr))),
+      away_win_rate = suppressWarnings(as.numeric(!!sym(ar)))
+    ) %>%
+    filter(!is.na(home_win_rate) | !is.na(away_win_rate)) %>%
+    select(Season, TeamID, home_win_rate, away_win_rate)
+}
+
+#' Load NET, ELO, WAB from Resumes.csv and Teamsheet Ranks.csv (nishaa)
+#' Resumes: YEAR, TEAM, ELO, WAB RANK. Teamsheet: YEAR, TEAM, NET, WAB
+#' @return Tibble with Season, TeamID, elo, net, wab
+load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup) {
+  if (is.null(resumes_path)) resumes_path <- here::here("data", "raw_nishaa", "Resumes.csv")
+  if (is.null(teamsheet_path)) teamsheet_path <- here::here("data", "raw_nishaa", "Teamsheet Ranks.csv")
+  out <- tibble(Season = integer(), TeamID = integer(), elo = numeric(), net = numeric(), wab = numeric())
+  if (file.exists(resumes_path)) {
+    r <- read_csv(resumes_path, show_col_types = FALSE)
+    if (nrow(r) > 0 && "TEAM" %in% names(r)) {
+      r <- r %>% rename(Season = YEAR, Team = TEAM)
+      r$TeamID <- map_kenpom_to_teamids(r, lookup)
+      elo_col <- names(r)[grep("^ELO$", names(r), ignore.case = TRUE)][1]
+      wab_col <- names(r)[grep("WAB", names(r), ignore.case = TRUE)][1]
+      r <- r %>%
+        filter(!is.na(TeamID)) %>%
+        mutate(
+          elo = if (length(elo_col) > 0 && !is.na(elo_col)) suppressWarnings(as.numeric(.data[[elo_col]])) else NA_real_,
+          wab_resume = if (length(wab_col) > 0 && !is.na(wab_col)) suppressWarnings(as.numeric(.data[[wab_col]])) else NA_real_
+        ) %>%
+        select(Season, TeamID, elo, wab_resume)
+      out <- r
+    }
+  }
+  if (file.exists(teamsheet_path)) {
+    ts <- read_csv(teamsheet_path, show_col_types = FALSE)
+    if (nrow(ts) > 0 && "TEAM" %in% names(ts)) {
+      ts <- ts %>% rename(Season = YEAR, Team = TEAM)
+      ts$TeamID <- map_kenpom_to_teamids(ts, lookup)
+      net_col <- names(ts)[grep("^NET$", names(ts), ignore.case = TRUE)][1]
+      wab_col <- names(ts)[grep("^WAB$", names(ts), ignore.case = TRUE)][1]
+      ts <- ts %>%
+        filter(!is.na(TeamID)) %>%
+        mutate(
+          net = if (length(net_col) > 0 && !is.na(net_col)) suppressWarnings(as.numeric(.data[[net_col]])) else NA_real_,
+          wab = if (length(wab_col) > 0 && !is.na(wab_col)) suppressWarnings(as.numeric(.data[[wab_col]])) else NA_real_
+        ) %>%
+        select(Season, TeamID, net, wab)
+      if (nrow(out) > 0) {
+        out <- out %>%
+          full_join(ts, by = c("Season", "TeamID")) %>%
+          mutate(
+            wab = coalesce(wab, wab_resume),
+            elo = replace_na(elo, 0),
+            net = replace_na(net, 200),
+            wab = replace_na(wab, 200)
+          ) %>%
+          select(Season, TeamID, elo, net, wab)
+      } else {
+        out <- ts %>% mutate(elo = 0, net = replace_na(net, 200), wab = replace_na(wab, 200)) %>%
+          select(Season, TeamID, elo, net, wab)
+      }
+    }
+  }
+  # When only Resumes: ensure net, wab present
+  if (nrow(out) > 0 && !"net" %in% names(out)) {
+    out <- out %>% mutate(net = 200, wab = coalesce(wab_resume, 200)) %>% select(Season, TeamID, elo, net, wab)
+  } else if (nrow(out) > 0 && "wab_resume" %in% names(out)) {
+    out <- out %>% mutate(wab = coalesce(wab, wab_resume, 200)) %>% select(Season, TeamID, elo, net, wab)
+  }
+  out
 }

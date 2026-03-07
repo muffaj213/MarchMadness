@@ -23,8 +23,9 @@ MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff",
                        "seed_winpct_interaction", "pf_diff", "round", "h2h_team_a_winpct", "sos_diff", "rest_diff")
-KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff",
-                         "adjem_seed_interaction", "seed_latewinpct_interaction")
+EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff")
+KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff",
+                         "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction")
 
 # -----------------------------------------------------------------------------
 # BASELINE: Fixed parameters (original setup)
@@ -53,7 +54,7 @@ BASELINE_SPECS <- list(
 
 #' Build baseline workflow (fixed parameters)
 build_baseline_workflow <- function(model_type, matchup_data) {
-  all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS)
+  all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS, EXTRA_FEATURE_COLS)
   avail <- intersect(all_feat, names(matchup_data))
   if (length(avail) == 0) stop("No feature columns found in matchup_data")
   formula_str <- paste("outcome ~", paste(avail, collapse = " + "))
@@ -78,7 +79,7 @@ build_baseline_workflow <- function(model_type, matchup_data) {
 
 #' Build tuned workflow (parameters to be tuned)
 build_tuned_workflow <- function(model_type, matchup_data) {
-  all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS)
+  all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS, EXTRA_FEATURE_COLS)
   avail <- intersect(all_feat, names(matchup_data))
   if (length(avail) == 0) stop("No feature columns found in matchup_data")
   formula_str <- paste("outcome ~", paste(avail, collapse = " + "))

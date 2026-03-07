@@ -50,6 +50,18 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else {
     NULL
   }
+  home_away_path <- file.path(PROC_DIR, "home_away_stats.csv")
+  home_away_stats <- if (file.exists(home_away_path)) {
+    read_csv(home_away_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
+  resume_path <- file.path(PROC_DIR, "resume_stats.csv")
+  resume_stats <- if (file.exists(resume_path)) {
+    read_csv(resume_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
 
   # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
   seeds_needed <- seeds %>% distinct(Season, TeamID)
@@ -83,7 +95,9 @@ load_for_prediction <- function(seeds_file = NULL) {
     seeds = seeds,
     slots = slots,
     teams = teams,
-    kenpom_stats = kenpom_stats
+    kenpom_stats = kenpom_stats,
+    home_away_stats = home_away_stats,
+    resume_stats = resume_stats
   )
 }
 
@@ -127,6 +141,8 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     points_stats = data$points_stats,
     kenpom_stats = data$kenpom_stats,
     late_win_pct = data$late_win_pct,
+    home_away_stats = data$home_away_stats,
+    resume_stats = data$resume_stats,
     deterministic = deterministic
   )
 

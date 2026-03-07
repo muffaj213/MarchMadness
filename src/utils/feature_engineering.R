@@ -207,7 +207,8 @@ compute_points_stats <- function(regular_results) {
 #' @param rest_stats Optional rest (Season, TeamID, days_rest)
 #' @return Data frame with Season, TeamA, TeamB, seed_diff, winpct_diff, etc., outcome
 build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
-                              head_to_head = NULL, sos_stats = NULL, rest_stats = NULL) {
+                              head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                              home_away_stats = NULL, resume_stats = NULL) {
   # Add seed numbers
   seeds <- seeds %>%
     mutate(SeedNum = parse_seed_number(Seed))
@@ -341,23 +342,61 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     games <- games %>% mutate(rest_diff = 0L)
   }
 
+  # Add home/away win rates if available
+  if (!is.null(home_away_stats) && nrow(home_away_stats) > 0) {
+    games <- games %>%
+      left_join(home_away_stats %>% select(Season, TeamA = TeamID, home_A = home_win_rate, away_A = away_win_rate), by = c("Season", "TeamA")) %>%
+      left_join(home_away_stats %>% select(Season, TeamB = TeamID, home_B = home_win_rate, away_B = away_win_rate), by = c("Season", "TeamB")) %>%
+      mutate(
+        home_A = replace_na(home_A, 0.5), home_B = replace_na(home_B, 0.5),
+        away_A = replace_na(away_A, 0.5), away_B = replace_na(away_B, 0.5),
+        home_win_rate_diff = home_A - home_B,
+        away_win_rate_diff = away_A - away_B
+      ) %>%
+      select(-home_A, -home_B, -away_A, -away_B)
+  } else {
+    games <- games %>% mutate(home_win_rate_diff = 0, away_win_rate_diff = 0)
+  }
+
+  # Add NET/ELO/WAB from resume stats if available
+  if (!is.null(resume_stats) && nrow(resume_stats) > 0) {
+    games <- games %>%
+      left_join(resume_stats %>% select(Season, TeamA = TeamID, elo_A = elo, net_A = net, wab_A = wab), by = c("Season", "TeamA")) %>%
+      left_join(resume_stats %>% select(Season, TeamB = TeamID, elo_B = elo, net_B = net, wab_B = wab), by = c("Season", "TeamB")) %>%
+      mutate(
+        elo_A = replace_na(elo_A, 0), elo_B = replace_na(elo_B, 0),
+        net_A = replace_na(net_A, 200), net_B = replace_na(net_B, 200),
+        wab_A = replace_na(wab_A, 200), wab_B = replace_na(wab_B, 200),
+        elo_diff = elo_A - elo_B,
+        net_diff = net_B - net_A,  # lower NET = better, so B - A when A better
+        wab_diff = wab_B - wab_A   # lower WAB = better, so B - A when A better
+      ) %>%
+      select(-elo_A, -elo_B, -net_A, -net_B, -wab_A, -wab_B)
+  } else {
+    games <- games %>% mutate(elo_diff = 0, net_diff = 0, wab_diff = 0)
+  }
+
   # Add KenPom features if available
   if (!is.null(kenpom_stats) && nrow(kenpom_stats) > 0) {
     kenpom_dedup <- kenpom_stats %>% distinct(Season, TeamID, .keep_all = TRUE)
+    # Include luck if present (GitHub kenpom has it; gap/bt may not)
+    kp_cols <- c("Season", "TeamID", "adj_em", "adj_o", "adj_d", "adj_t")
+    if ("luck" %in% names(kenpom_dedup)) kp_cols <- c(kp_cols, "luck")
+    kp_sel_A <- kenpom_dedup %>% select(Season, TeamA = TeamID, adj_em_A = adj_em, adj_o_A = adj_o, adj_d_A = adj_d, adj_t_A = adj_t, any_of("luck"))
+    if ("luck" %in% names(kp_sel_A)) kp_sel_A <- kp_sel_A %>% rename(luck_A = luck)
+    kp_sel_B <- kenpom_dedup %>% select(Season, TeamB = TeamID, adj_em_B = adj_em, adj_o_B = adj_o, adj_d_B = adj_d, adj_t_B = adj_t, any_of("luck"))
+    if ("luck" %in% names(kp_sel_B)) kp_sel_B <- kp_sel_B %>% rename(luck_B = luck)
     games <- games %>%
-      left_join(
-        kenpom_dedup %>% select(Season, TeamA = TeamID, adj_em_A = adj_em, adj_o_A = adj_o, adj_d_A = adj_d, adj_t_A = adj_t),
-        by = c("Season", "TeamA")
-      ) %>%
-      left_join(
-        kenpom_dedup %>% select(Season, TeamB = TeamID, adj_em_B = adj_em, adj_o_B = adj_o, adj_d_B = adj_d, adj_t_B = adj_t),
-        by = c("Season", "TeamB")
-      ) %>%
+      left_join(kp_sel_A, by = c("Season", "TeamA")) %>%
+      left_join(kp_sel_B, by = c("Season", "TeamB")) %>%
       mutate(
         adj_em_A = replace_na(adj_em_A, 0), adj_em_B = replace_na(adj_em_B, 0),
         adj_o_A = replace_na(adj_o_A, 100), adj_o_B = replace_na(adj_o_B, 100),
         adj_d_A = replace_na(adj_d_A, 100), adj_d_B = replace_na(adj_d_B, 100),
         adj_t_A = replace_na(adj_t_A, 68), adj_t_B = replace_na(adj_t_B, 68),
+        luck_A = if ("luck_A" %in% names(.)) replace_na(luck_A, 0) else 0,
+        luck_B = if ("luck_B" %in% names(.)) replace_na(luck_B, 0) else 0,
+        luck_diff = luck_A - luck_B,
         adjem_diff = adj_em_A - adj_em_B,
         adj_off_diff = adj_o_A - adj_o_B,
         adj_def_diff = adj_d_B - adj_d_A,  # lower adj_d = better D, so B - A when A better
@@ -366,21 +405,28 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       mutate(
         seed_winpct_interaction = seed_diff * winpct_diff,
         adjem_seed_interaction = adjem_diff * seed_diff,
-        seed_latewinpct_interaction = seed_diff * late_winpct_diff
+        seed_latewinpct_interaction = seed_diff * late_winpct_diff,
+        round_seed_interaction = round * seed_diff
       )
     games <- games %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
              seed_winpct_interaction, pf_diff, h2h_team_a_winpct, sos_diff, rest_diff,
-             adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, adjem_seed_interaction, seed_latewinpct_interaction)
+             home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff,
+             adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, adjem_seed_interaction, seed_latewinpct_interaction,
+             round_seed_interaction)
   } else {
     games <- games %>%
       mutate(
         seed_winpct_interaction = seed_diff * winpct_diff,
         adjem_seed_interaction = 0,
-        seed_latewinpct_interaction = seed_diff * late_winpct_diff
+        seed_latewinpct_interaction = seed_diff * late_winpct_diff,
+        round_seed_interaction = round * seed_diff
       ) %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
-             seed_winpct_interaction, pf_diff, h2h_team_a_winpct, sos_diff, rest_diff, adjem_seed_interaction, seed_latewinpct_interaction)
+             seed_winpct_interaction, pf_diff, h2h_team_a_winpct, sos_diff, rest_diff,
+             home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff,
+             adjem_seed_interaction, seed_latewinpct_interaction,
+             round_seed_interaction)
   }
   games
 }
@@ -401,7 +447,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 #' @param round Round of game (1-6); default 1
 #' @return Data frame with one row of features
 compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
-                                     head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, round = 1L) {
+                                     head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                                     home_away_stats = NULL, resume_stats = NULL, round = 1L) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   seed_a <- seeds %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
@@ -438,8 +485,9 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
   } else 0.5
   late_winpct_diff <- late_wp_a - late_wp_b
 
+  round_num <- as.integer(round)
   out <- tibble(
-    round = as.integer(round),
+    round = round_num,
     seed_diff = seed_diff,
     seed_diff_sq = seed_diff_sq,
     seed_sum = seed_sum,
@@ -450,9 +498,46 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     h2h_team_a_winpct = 0.5,
     sos_diff = 0,
     rest_diff = 0L,
+    home_win_rate_diff = 0,
+    away_win_rate_diff = 0,
+    elo_diff = 0,
+    net_diff = 0,
+    wab_diff = 0,
+    adjem_diff = 0,
+    adj_off_diff = 0,
+    adj_def_diff = 0,
+    tempo_diff = 0,
+    luck_diff = 0,
     adjem_seed_interaction = 0,
-    seed_latewinpct_interaction = seed_diff * late_winpct_diff
+    seed_latewinpct_interaction = seed_diff * late_winpct_diff,
+    round_seed_interaction = round_num * seed_diff
   )
+
+  # Home/away and resume features
+  if (!is.null(home_away_stats) && nrow(home_away_stats) > 0) {
+    ha_a <- home_away_stats %>% filter(Season == season, TeamID == team_a)
+    ha_b <- home_away_stats %>% filter(Season == season, TeamID == team_b)
+    home_a <- if (nrow(ha_a) > 0) ha_a$home_win_rate[1] else 0.5
+    home_b <- if (nrow(ha_b) > 0) ha_b$home_win_rate[1] else 0.5
+    away_a <- if (nrow(ha_a) > 0) ha_a$away_win_rate[1] else 0.5
+    away_b <- if (nrow(ha_b) > 0) ha_b$away_win_rate[1] else 0.5
+    out <- out %>% mutate(home_win_rate_diff = home_a - home_b, away_win_rate_diff = away_a - away_b)
+  }
+  if (!is.null(resume_stats) && nrow(resume_stats) > 0) {
+    rs_a <- resume_stats %>% filter(Season == season, TeamID == team_a)
+    rs_b <- resume_stats %>% filter(Season == season, TeamID == team_b)
+    elo_a <- if (nrow(rs_a) > 0) rs_a$elo[1] else 0
+    elo_b <- if (nrow(rs_b) > 0) rs_b$elo[1] else 0
+    net_a <- if (nrow(rs_a) > 0) rs_a$net[1] else 200
+    net_b <- if (nrow(rs_b) > 0) rs_b$net[1] else 200
+    wab_a <- if (nrow(rs_a) > 0) rs_a$wab[1] else 200
+    wab_b <- if (nrow(rs_b) > 0) rs_b$wab[1] else 200
+    out <- out %>% mutate(
+      elo_diff = elo_a - elo_b,
+      net_diff = net_b - net_a,
+      wab_diff = wab_b - wab_a
+    )
+  }
 
   # KenPom features
   if (!is.null(kenpom_stats) && nrow(kenpom_stats) > 0) {
@@ -466,12 +551,16 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     adj_d_b <- if (nrow(kp_b) > 0) kp_b$adj_d[1] else 100
     adj_t_a <- if (nrow(kp_a) > 0) kp_a$adj_t[1] else 68
     adj_t_b <- if (nrow(kp_b) > 0) kp_b$adj_t[1] else 68
+    luck_a <- if (nrow(kp_a) > 0 && "luck" %in% names(kp_a)) kp_a$luck[1] else 0
+    luck_b <- if (nrow(kp_b) > 0 && "luck" %in% names(kp_b)) kp_b$luck[1] else 0
     out <- out %>%
       mutate(
         adjem_diff = adj_em_a - adj_em_b,
         adj_off_diff = adj_o_a - adj_o_b,
         adj_def_diff = adj_d_b - adj_d_a,
-        tempo_diff = adj_t_a - adj_t_b
+        tempo_diff = adj_t_a - adj_t_b,
+        luck_diff = luck_a - luck_b,
+        adjem_seed_interaction = (adj_em_a - adj_em_b) * seed_diff
       )
   }
   out

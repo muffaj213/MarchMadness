@@ -148,6 +148,13 @@ main <- function() {
   if (nrow(sos_stats) > 0) message("  SOS: ", nrow(sos_stats), " team-season rows")
   if (nrow(rest_stats) > 0) message("  Rest: ", nrow(rest_stats), " team-season rows")
 
+  message("Loading home/away win rates and resume stats...")
+  lookup <- build_season_team_lookup(raw$tourney_seeds, raw$teams)
+  home_away_stats <- load_home_away_win_rates(lookup = lookup)
+  resume_stats <- load_resume_stats(lookup = lookup)
+  if (nrow(home_away_stats) > 0) message("  Home/away: ", nrow(home_away_stats), " team-season rows")
+  if (nrow(resume_stats) > 0) message("  Resume (NET/ELO/WAB): ", nrow(resume_stats), " team-season rows")
+
   message("Building matchup training data...")
   matchup_data <- build_matchup_data(
     tourney_results,
@@ -158,7 +165,9 @@ main <- function() {
     late_win_pct = late_win_pct,
     head_to_head = head_to_head,
     sos_stats = sos_stats,
-    rest_stats = rest_stats
+    rest_stats = rest_stats,
+    home_away_stats = home_away_stats,
+    resume_stats = resume_stats
   )
 
   message("Saving processed data...")
@@ -174,6 +183,8 @@ main <- function() {
   if (nrow(head_to_head) > 0) write_csv(head_to_head, file.path(PROC_DIR, "head_to_head.csv"))
   if (nrow(sos_stats) > 0) write_csv(sos_stats, file.path(PROC_DIR, "sos_stats.csv"))
   if (nrow(rest_stats) > 0) write_csv(rest_stats, file.path(PROC_DIR, "rest_stats.csv"))
+  if (nrow(home_away_stats) > 0) write_csv(home_away_stats, file.path(PROC_DIR, "home_away_stats.csv"))
+  if (nrow(resume_stats) > 0) write_csv(resume_stats, file.path(PROC_DIR, "resume_stats.csv"))
 
   # Save seeds and slots for prediction (no processing needed)
   write_csv(raw$tourney_seeds, file.path(PROC_DIR, "tourney_seeds.csv"))
