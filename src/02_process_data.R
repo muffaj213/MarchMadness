@@ -112,11 +112,15 @@ main <- function() {
   points_stats <- compute_points_stats(regular_results)
   late_win_pct <- compute_late_win_pct(regular_results, day_cutoff = 90)
   recent_win_pct <- compute_recent_win_pct(regular_results, n_games = 10L, tourney_start_day = 134L)
+  recent_mov <- compute_recent_mov(regular_results, n_games = 10L, tourney_start_day = 134L)
   if (nrow(late_win_pct) > 0) {
     message("  Late-season win pct: ", nrow(late_win_pct), " team-season rows (DayNum >= 90)")
   }
   if (nrow(recent_win_pct) > 0) {
     message("  Recent win pct (last 10 games): ", nrow(recent_win_pct), " team-season rows")
+  }
+  if (nrow(recent_mov) > 0) {
+    message("  Recent MOV (last 10 games): ", nrow(recent_mov), " team-season rows")
   }
 
   message("Loading KenPom data...")
@@ -156,6 +160,19 @@ main <- function() {
   lookup <- build_season_team_lookup(raw$tourney_seeds, raw$teams)
   home_away_stats <- load_home_away_win_rates(lookup = lookup)
   resume_stats <- load_resume_stats(lookup = lookup)
+  barttorvik_metrics <- load_barttorvik_resume_metrics(lookup = lookup)
+  if (nrow(barttorvik_metrics) > 0 && nrow(resume_stats) > 0) {
+    resume_stats <- resume_stats %>%
+      left_join(barttorvik_metrics, by = c("Season", "TeamID")) %>%
+      mutate(barthag = replace_na(barthag, 0.5), elite_sos = replace_na(elite_sos, 0))
+    message("  Barttorvik (BARTHAG/ELITE SOS): ", nrow(barttorvik_metrics), " team-season rows merged")
+  } else if (nrow(barttorvik_metrics) > 0 && nrow(resume_stats) == 0) {
+    resume_stats <- barttorvik_metrics %>%
+      mutate(elo = 0, net = 200, wab = 200, barthag = replace_na(barthag, 0.5), elite_sos = replace_na(elite_sos, 0))
+    message("  Resume stats from Barttorvik only (BARTHAG/ELITE SOS): ", nrow(resume_stats), " rows")
+  } else if (nrow(resume_stats) > 0) {
+    resume_stats <- resume_stats %>% mutate(barthag = 0.5, elite_sos = 0)
+  }
   if (nrow(home_away_stats) > 0) message("  Home/away: ", nrow(home_away_stats), " team-season rows")
   if (nrow(resume_stats) > 0) message("  Resume (NET/ELO/WAB): ", nrow(resume_stats), " team-season rows")
 
@@ -172,7 +189,8 @@ main <- function() {
     rest_stats = rest_stats,
     home_away_stats = home_away_stats,
     resume_stats = resume_stats,
-    recent_win_pct = recent_win_pct
+    recent_win_pct = recent_win_pct,
+    recent_mov = recent_mov
   )
 
   message("Saving processed data...")
@@ -183,6 +201,9 @@ main <- function() {
   }
   if (nrow(recent_win_pct) > 0) {
     write_csv(recent_win_pct, file.path(PROC_DIR, "recent_win_pct.csv"))
+  }
+  if (nrow(recent_mov) > 0) {
+    write_csv(recent_mov, file.path(PROC_DIR, "recent_mov.csv"))
   }
   if (nrow(kenpom_stats) > 0) {
     write_csv(kenpom_stats, file.path(PROC_DIR, "kenpom_stats.csv"))

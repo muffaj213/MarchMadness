@@ -66,7 +66,8 @@ get_team_for_seed <- function(seed_id, seeds_df, season) {
 #' @return List with slot_winners, game_results, champion
 simulate_bracket <- function(season, slots_df, seeds_df, model,
                             win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
-                            recent_win_pct = NULL, home_away_stats = NULL, resume_stats = NULL, deterministic = FALSE) {
+                            recent_win_pct = NULL, recent_mov = NULL, home_away_stats = NULL, resume_stats = NULL,
+                            head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, deterministic = FALSE) {
   # Load feature engineering (compute_matchup_features)
   fe_path <- here::here("src", "utils", "feature_engineering.R")
   if (file.exists(fe_path)) source(fe_path, local = TRUE)
@@ -106,7 +107,9 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
     if (is.na(round_num)) round_num <- 1L
     features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct,
-                                         home_away_stats = home_away_stats, resume_stats = resume_stats, recent_win_pct = recent_win_pct,
+                                         head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
+                                         home_away_stats = home_away_stats, resume_stats = resume_stats,
+                                         recent_win_pct = recent_win_pct, recent_mov = recent_mov,
                                          round = round_num)
 
     pred <- tryCatch(

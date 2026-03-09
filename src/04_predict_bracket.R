@@ -42,6 +42,12 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else {
     NULL
   }
+  recent_mov_path <- file.path(PROC_DIR, "recent_mov.csv")
+  recent_mov <- if (file.exists(recent_mov_path)) {
+    read_csv(recent_mov_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
   seeds <- if (is.null(seeds_file)) {
     read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
   } else {
@@ -65,6 +71,24 @@ load_for_prediction <- function(seeds_file = NULL) {
   resume_path <- file.path(PROC_DIR, "resume_stats.csv")
   resume_stats <- if (file.exists(resume_path)) {
     read_csv(resume_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
+  head_to_head_path <- file.path(PROC_DIR, "head_to_head.csv")
+  head_to_head <- if (file.exists(head_to_head_path)) {
+    read_csv(head_to_head_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
+  sos_path <- file.path(PROC_DIR, "sos_stats.csv")
+  sos_stats <- if (file.exists(sos_path)) {
+    read_csv(sos_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
+  rest_path <- file.path(PROC_DIR, "rest_stats.csv")
+  rest_stats <- if (file.exists(rest_path)) {
+    read_csv(rest_path, show_col_types = FALSE)
   } else {
     NULL
   }
@@ -99,12 +123,16 @@ load_for_prediction <- function(seeds_file = NULL) {
     points_stats = points_stats,
     late_win_pct = late_win_pct,
     recent_win_pct = recent_win_pct,
+    recent_mov = recent_mov,
     seeds = seeds,
     slots = slots,
     teams = teams,
     kenpom_stats = kenpom_stats,
     home_away_stats = home_away_stats,
-    resume_stats = resume_stats
+    resume_stats = resume_stats,
+    head_to_head = head_to_head,
+    sos_stats = sos_stats,
+    rest_stats = rest_stats
   )
 }
 
@@ -149,8 +177,12 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     kenpom_stats = data$kenpom_stats,
     late_win_pct = data$late_win_pct,
     recent_win_pct = data$recent_win_pct,
+    recent_mov = data$recent_mov,
     home_away_stats = data$home_away_stats,
     resume_stats = data$resume_stats,
+    head_to_head = data$head_to_head,
+    sos_stats = data$sos_stats,
+    rest_stats = data$rest_stats,
     deterministic = deterministic
   )
 

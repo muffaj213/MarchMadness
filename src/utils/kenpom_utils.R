@@ -317,3 +317,24 @@ load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup
   }
   out
 }
+
+#' Load BARTHAG and ELITE SOS from Barttorvik CSV (optional resume metrics)
+#' @return Tibble with Season, TeamID, barthag, elite_sos (or empty)
+load_barttorvik_resume_metrics <- function(bt_path = NULL, lookup) {
+  if (is.null(bt_path)) bt_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
+  if (!file.exists(bt_path)) return(tibble())
+  bt <- read_csv(bt_path, show_col_types = FALSE)
+  if (nrow(bt) == 0) return(tibble())
+  bt <- bt %>% rename(Season = YEAR, Team = TEAM)
+  bt$TeamID <- map_kenpom_to_teamids(bt, lookup)
+  barthag_col <- names(bt)[grep("BARTHAG", names(bt), ignore.case = TRUE)][1]
+  elite_col <- names(bt)[grep("ELITE.*SOS|ELITE_SOS", names(bt), ignore.case = TRUE)][1]
+  if (is.na(barthag_col)) return(tibble())
+  bt %>%
+    filter(!is.na(TeamID)) %>%
+    mutate(
+      barthag = suppressWarnings(as.numeric(.data[[barthag_col]])),
+      elite_sos = if (!is.na(elite_col) && elite_col %in% names(.)) suppressWarnings(as.numeric(.data[[elite_col]])) else NA_real_
+    ) %>%
+    select(Season, TeamID, barthag, elite_sos)
+}

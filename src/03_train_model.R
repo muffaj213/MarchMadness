@@ -26,11 +26,11 @@ TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/-
 TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
-BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff",
+BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
                        "is_upset_matchup", "upset_seed_gap", "seed_winpct_interaction", "pf_diff", "round",
-                       "h2h_team_a_winpct", "sos_diff", "rest_diff")
-EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff")
-KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff",
+                       "h2h_team_a_winpct", "h2h_games", "sos_diff", "rest_diff")
+EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")
+KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
                          "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction")
 
 # -----------------------------------------------------------------------------
