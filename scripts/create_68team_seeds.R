@@ -66,7 +66,20 @@ create_68team_seeds <- function(seeds_64, season, playin_teams = NULL) {
     }
     message("Added play-in placeholder rows. Edit the CSV to fill TeamIDs for W16a/b, W11a/b, Y11a/b, Z16a/b.")
   }
-  bind_rows(base, playin_rows) %>% arrange(Season, Seed)
+  result <- bind_rows(base, playin_rows) %>% arrange(Season, Seed)
+
+  # Sanity check: X16 and Y16 (direct 16-seeds) must not be in play-in teams.
+  # W16 and Z16 are play-ins; their teams must not also appear as X16/Y16.
+  if (nrow(playin_rows) > 0) {
+    playin_ids <- unique(as.integer(playin_rows$TeamID))
+    direct_16 <- result %>% filter(Seed %in% c("X16", "Y16"))
+    bad <- direct_16 %>% filter(TeamID %in% playin_ids)
+    if (nrow(bad) > 0) {
+      warning("Teams in play-ins (W16/Z16) also appear as X16/Y16 - they cannot play two games. ",
+              "Fix seeds so X16 and Y16 use the direct 16-seeds from tourney_seeds, not play-in teams.")
+    }
+  }
+  result
 }
 
 #' Main: create seeds_68team_YYYY.csv
