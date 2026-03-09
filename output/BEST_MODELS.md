@@ -2,7 +2,7 @@
 
 *Updated 2026-03-09*
 
-**Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple.
+**Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple. Lower metrics with this strategy are more trustworthy than earlier single-year results.
 
 ---
 
@@ -17,6 +17,8 @@
 | rand_forest | baseline | 68.2%    | 0.5499   |
 
 *2024 holdout, 63 games*
+
+**⚠️ These numbers were likely too optimistic** because: (1) single-year holdout (63 games) has high variance—a 5% accuracy swing is only ~3 games; (2) model selection and tuning were partly overfit to 2024's structure; (3) random 5-fold CV during tuning mixed past/future seasons, which doesn't reflect real deployment. The multi-year validation below (2022–2024, 189 games) is a more trustworthy estimate of true generalization.
 
 ---
 
