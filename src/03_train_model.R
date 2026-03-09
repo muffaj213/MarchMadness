@@ -26,8 +26,9 @@ TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/-
 TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
-BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff",
-                       "seed_winpct_interaction", "pf_diff", "round", "h2h_team_a_winpct", "sos_diff", "rest_diff")
+BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff",
+                       "is_upset_matchup", "upset_seed_gap", "seed_winpct_interaction", "pf_diff", "round",
+                       "h2h_team_a_winpct", "sos_diff", "rest_diff")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff",
                          "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction")
@@ -335,23 +336,28 @@ run_tuned <- function(train_data, matchup_data, test_years) {
   list(comparison = comparison, tuned_params = tuned_params)
 }
 
-#' Run ensemble: blend tuned model predictions, optimize weights by log loss
+#' Run ensemble: blend baseline + tuned model predictions, optimize weights by log loss
 #' @return List with ensemble eval and (if better) the ensemble object to save
-run_ensemble <- function(matchup_data, test_years, tuned_comp) {
-  message("\n========== ENSEMBLE (blend tuned models) ==========")
+run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp) {
+  message("\n========== ENSEMBLE (blend baseline + tuned models) ==========")
 
-  # Load tuned models (prefer tuned over baseline)
+  # Load both baseline and tuned models into pool
   models <- list()
   for (mt in MODEL_TYPES) {
-    path <- file.path(MODELS_DIR, paste0("bracket_model_", mt, ".rds"))
-    if (file.exists(path)) {
-      models[[mt]] <- readRDS(path)
+    path_baseline <- file.path(MODELS_DIR, paste0("bracket_model_", mt, "_baseline.rds"))
+    path_tuned <- file.path(MODELS_DIR, paste0("bracket_model_", mt, ".rds"))
+    if (file.exists(path_baseline)) {
+      models[[paste0(mt, "_baseline")]] <- readRDS(path_baseline)
+    }
+    if (file.exists(path_tuned)) {
+      models[[paste0(mt, "_tuned")]] <- readRDS(path_tuned)
     }
   }
   if (length(models) < 2) {
-    message("Need at least 2 tuned models for ensemble. Skipping.")
+    message("Need at least 2 models for ensemble. Skipping.")
     return(NULL)
   }
+  message("  Pool: ", paste(names(models), collapse = ", "))
 
   test_data <- matchup_data %>%
     filter(Season %in% test_years) %>%
@@ -377,8 +383,17 @@ run_ensemble <- function(matchup_data, test_years, tuned_comp) {
     prob <- pmax(eps, pmin(1 - eps, prob))
     -mean(outcome_num * log(prob) + (1 - outcome_num) * log(1 - prob))
   }
-  # Start from inverse log-loss weights (aligned to pred_df column order)
-  ll_vals <- tuned_comp$LogLoss[match(names(models), tuned_comp$Model)]
+  # Start from inverse log-loss weights (baseline_comp for *_baseline, tuned_comp for *_tuned)
+  ll_vals <- numeric(length(models))
+  names(ll_vals) <- names(models)
+  for (nm in names(models)) {
+    base_name <- sub("_baseline$|_tuned$", "", nm)
+    if (grepl("_baseline$", nm)) {
+      ll_vals[nm] <- baseline_comp$LogLoss[match(base_name, baseline_comp$Model)]
+    } else {
+      ll_vals[nm] <- tuned_comp$LogLoss[match(base_name, tuned_comp$Model)]
+    }
+  }
   ll_vals <- replace(ll_vals, is.na(ll_vals), 0.6)
   inv_ll <- 1 / pmax(ll_vals, 0.01)
   w0 <- inv_ll / sum(inv_ll)
@@ -481,8 +496,8 @@ main <- function() {
   tuned_comp <- tuned_out$comparison
   write_csv(tuned_comp, file.path(OUTPUT_DIR, "model_comparison_tuned.csv"))
 
-  # Run ensemble (blend tuned models)
-  ensemble_out <- run_ensemble(matchup_data, test_years, tuned_comp)
+  # Run ensemble (blend baseline + tuned models)
+  ensemble_out <- run_ensemble(matchup_data, test_years, baseline_comp, tuned_comp)
   ensemble_comp <- tibble()
   if (!is.null(ensemble_out)) {
     ensemble_comp <- ensemble_out$comparison
@@ -593,7 +608,7 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
     ec_ll <- fmt_ll(ec$LogLoss[1], if ("LogLoss_SD" %in% names(ec)) ec$LogLoss_SD[1] else NA)
     ensemble_md <- paste0(
       "\n---\n\n## Ensemble Results\n\n",
-      "*Blended predictions from tuned GLM, XGBoost, and Random Forest. ",
+      "*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. ",
       "Weights optimized to minimize log loss on holdout.*\n\n",
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",

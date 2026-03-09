@@ -111,8 +111,12 @@ main <- function() {
   win_pct <- compute_win_pct(regular_results)
   points_stats <- compute_points_stats(regular_results)
   late_win_pct <- compute_late_win_pct(regular_results, day_cutoff = 90)
+  recent_win_pct <- compute_recent_win_pct(regular_results, n_games = 10L, tourney_start_day = 134L)
   if (nrow(late_win_pct) > 0) {
     message("  Late-season win pct: ", nrow(late_win_pct), " team-season rows (DayNum >= 90)")
+  }
+  if (nrow(recent_win_pct) > 0) {
+    message("  Recent win pct (last 10 games): ", nrow(recent_win_pct), " team-season rows")
   }
 
   message("Loading KenPom data...")
@@ -167,7 +171,8 @@ main <- function() {
     sos_stats = sos_stats,
     rest_stats = rest_stats,
     home_away_stats = home_away_stats,
-    resume_stats = resume_stats
+    resume_stats = resume_stats,
+    recent_win_pct = recent_win_pct
   )
 
   message("Saving processed data...")
@@ -175,6 +180,9 @@ main <- function() {
   write_csv(points_stats, file.path(PROC_DIR, "points_stats.csv"))
   if (nrow(late_win_pct) > 0) {
     write_csv(late_win_pct, file.path(PROC_DIR, "late_win_pct.csv"))
+  }
+  if (nrow(recent_win_pct) > 0) {
+    write_csv(recent_win_pct, file.path(PROC_DIR, "recent_win_pct.csv"))
   }
   if (nrow(kenpom_stats) > 0) {
     write_csv(kenpom_stats, file.path(PROC_DIR, "kenpom_stats.csv"))

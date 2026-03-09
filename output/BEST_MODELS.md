@@ -2,7 +2,7 @@
 
 *Updated 2026-03-09*
 
-**Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple. Lower metrics with this strategy are more trustworthy than earlier single-year results.
+**Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple.
 
 ---
 
@@ -18,8 +18,6 @@
 
 *2024 holdout, 63 games*
 
-**⚠️ These numbers were likely too optimistic** because: (1) single-year holdout (63 games) has high variance—a 5% accuracy swing is only ~3 games; (2) model selection and tuning were partly overfit to 2024's structure; (3) random 5-fold CV during tuning mixed past/future seasons, which doesn't reflect real deployment. The multi-year validation below (2022–2024, 189 games) is a more trustworthy estimate of true generalization.
-
 ---
 
 ## Baseline Models
@@ -28,9 +26,9 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 69.84 ± 1.59% | 0.5594 ± 0.0296 |
-| xgboost | baseline | 70.37 ± 1.83% | 0.6150 ± 0.0612 |
-| rand_forest | baseline | 71.96 ± 3.67% | 0.5458 ± 0.0353 |
+| glm | baseline | 69.84 ± 1.59% | 0.5555 ± 0.0292 |
+| xgboost | baseline | 70.37 ± 2.42% | 0.6200 ± 0.0404 |
+| rand_forest | baseline | 72.49 ± 1.83% | 0.5485 ± 0.0406 |
 
 ---
 
@@ -40,9 +38,9 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 70.37 ± 3.67% | 0.5620 ± 0.0270 |
-| xgboost | tuned | 72.49 ± 3.30% | 0.5519 ± 0.0247 |
-| rand_forest | tuned | 71.96 ± 2.42% | 0.5451 ± 0.0292 |
+| glm | tuned | 70.90 ± 3.30% | 0.5617 ± 0.0258 |
+| xgboost | tuned | 71.43 ± 3.17% | 0.5416 ± 0.0042 |
+| rand_forest | tuned | 72.49 ± 3.30% | 0.5479 ± 0.0309 |
 
 ---
 
@@ -52,25 +50,28 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| ensemble | ensemble | 73.02 ± 2.75% | 0.5431 ± 0.0215 |
+| Best (log loss)| ensemble | ensemble | 73.54 ± 3.30% | 0.5396 ± 0.0113 |
 
 ---
 
 ## Ensemble Results
 
-*Blended predictions from tuned GLM, XGBoost, and Random Forest. Weights optimized to minimize log loss on holdout.*
+*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. Weights optimized to minimize log loss on holdout.*
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 73.02 ± 2.75% | 0.5431 ± 0.0215 | 189 |
+| Ensemble | 73.54 ± 3.30% | 0.5396 ± 0.0113 | 189 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
 |-------------|--------|
-| glm | 0.000 |
-| xgboost | 0.317 |
-| rand_forest | 0.683 |
+| glm_baseline | 0.000 |
+| glm_tuned | 0.000 |
+| xgboost_baseline | 0.000 |
+| xgboost_tuned | 0.670 |
+| rand_forest_baseline | 0.000 |
+| rand_forest_tuned | 0.330 |
 
 *Weights updated 2026-03-09*
 

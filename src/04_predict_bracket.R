@@ -36,6 +36,12 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else {
     NULL
   }
+  recent_win_pct_path <- file.path(PROC_DIR, "recent_win_pct.csv")
+  recent_win_pct <- if (file.exists(recent_win_pct_path)) {
+    read_csv(recent_win_pct_path, show_col_types = FALSE)
+  } else {
+    NULL
+  }
   seeds <- if (is.null(seeds_file)) {
     read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
   } else {
@@ -92,6 +98,7 @@ load_for_prediction <- function(seeds_file = NULL) {
     win_pct = win_pct,
     points_stats = points_stats,
     late_win_pct = late_win_pct,
+    recent_win_pct = recent_win_pct,
     seeds = seeds,
     slots = slots,
     teams = teams,
@@ -141,6 +148,7 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     points_stats = data$points_stats,
     kenpom_stats = data$kenpom_stats,
     late_win_pct = data$late_win_pct,
+    recent_win_pct = data$recent_win_pct,
     home_away_stats = data$home_away_stats,
     resume_stats = data$resume_stats,
     deterministic = deterministic
