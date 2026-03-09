@@ -17,8 +17,13 @@ OUTPUT_DIR <- here("output")
 CONFIG_DIR <- here("config")
 
 # Model configuration
-TRAIN_SEASONS_END <- 2023L  # Train on seasons through this year
-TEST_SEASONS <- 2024L       # Hold out for validation
+# Validation strategy: time-based splits avoid overfitting to random folds
+# - Tuning: expanding-window CV (train on past seasons, validate on next)
+# - Holdout: multiple years for mean +/- SD (reduces variance from single year)
+# For production (e.g. predict 2025): set TRAIN_SEASONS_END=2024, TEST_SEASONS=2024
+TRAIN_SEASONS_END <- 2021L  # Last season for training (test years must be > this)
+TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/- SD)
+TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff",
@@ -103,7 +108,39 @@ build_tuned_workflow <- function(model_type, matchup_data) {
     add_model(spec)
 }
 
-#' Evaluate model on held-out season(s)
+#' Create time-based resampling splits (expanding window by season)
+#' Each fold: train on seasons < validation_year, validate on validation_year
+#' Ensures no future data leaks into training.
+make_time_folds <- function(data, first_validation_year = TUNE_VALIDATION_FIRST_YEAR) {
+  if (!"Season" %in% names(data)) stop("data must have Season column")
+  data <- data %>% arrange(Season)
+  seasons <- sort(unique(data$Season))
+  validation_years <- seasons[seasons >= first_validation_year]
+  if (length(validation_years) < 2) {
+    message("Fewer than 2 validation years; falling back to vfold_cv")
+    return(vfold_cv(data, v = min(5, nrow(data) %/% 20), strata = outcome))
+  }
+
+  splits <- list()
+  ids <- character(length(validation_years))
+  for (i in seq_along(validation_years)) {
+    yr <- validation_years[i]
+    analysis_idx <- which(data$Season < yr)
+    assessment_idx <- which(data$Season == yr)
+    if (length(analysis_idx) < 50 || length(assessment_idx) < 10) next
+    sp <- rsample::make_splits(
+      x = list(analysis = analysis_idx, assessment = assessment_idx),
+      data = data
+    )
+    splits[[length(splits) + 1]] <- sp
+    ids[length(splits)] <- paste0("Year_", yr)
+  }
+  if (length(splits) == 0) return(vfold_cv(data, v = 5, strata = outcome))
+  rsample::manual_rset(splits, ids[seq_len(length(splits))])
+}
+
+#' Evaluate model on held-out season(s); supports single or multiple years
+#' @return List with accuracy, log_loss, and (for multi-year) accuracy_sd, log_loss_sd, per_year
 evaluate_model <- function(model, matchup_data, test_seasons) {
   test_data <- matchup_data %>%
     filter(Season %in% test_seasons) %>%
@@ -122,7 +159,27 @@ evaluate_model <- function(model, matchup_data, test_seasons) {
   probs <- pmax(eps, pmin(1 - eps, prob_win))
   log_loss <- -mean(test_data$outcome_num * log(probs) + (1 - test_data$outcome_num) * log(1 - probs))
 
-  list(accuracy = accuracy, log_loss = log_loss, predictions = test_data, n_games = nrow(test_data))
+  out <- list(
+    accuracy = accuracy, log_loss = log_loss,
+    predictions = test_data, n_games = nrow(test_data)
+  )
+
+  # Multi-year: add per-year stats and SD
+  if (length(test_seasons) > 1) {
+    per_year <- test_data %>%
+      group_by(Season) %>%
+      summarise(
+        n = n(),
+        accuracy = mean(correct),
+        log_loss = -mean(outcome_num * log(pmax(eps, pmin(1 - eps, pred_prob))) +
+                          (1 - outcome_num) * log(pmax(eps, pmin(1 - eps, 1 - pred_prob)))),
+        .groups = "drop"
+      )
+    out$accuracy_sd <- sd(per_year$accuracy)
+    out$log_loss_sd <- sd(per_year$log_loss)
+    out$per_year <- per_year
+  }
+  out
 }
 
 #' Save baseline config to file (for reference)
@@ -171,12 +228,16 @@ run_baseline <- function(train_data, matchup_data, test_years) {
     saveRDS(model, file.path(MODELS_DIR, paste0("bracket_model_", mt, "_baseline.rds")))
     eval <- evaluate_model(model, matchup_data, test_years)
     if (!is.null(eval)) {
-      message("  Holdout accuracy: ", round(eval$accuracy * 100, 2), "% | Log loss: ", round(eval$log_loss, 4))
+      msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
+      if (!is.null(eval$accuracy_sd)) msg <- paste0(msg, " (mean across ", length(test_years), " years)")
+      message(sprintf(msg, eval$accuracy * 100, eval$log_loss))
       comparison <- bind_rows(comparison, tibble(
         Config = "baseline",
         Model = mt,
         Accuracy_Pct = round(eval$accuracy * 100, 2),
         LogLoss = round(eval$log_loss, 4),
+        Accuracy_SD = if (!is.null(eval$accuracy_sd)) round(eval$accuracy_sd * 100, 2) else NA_real_,
+        LogLoss_SD = if (!is.null(eval$log_loss_sd)) round(eval$log_loss_sd, 4) else NA_real_,
         N_Games = eval$n_games
       ))
     }
@@ -185,12 +246,14 @@ run_baseline <- function(train_data, matchup_data, test_years) {
 }
 
 #' Run tuned models and return comparison + best params
+#' Uses time-based CV (expanding window by season) to avoid overfitting to random splits
 run_tuned <- function(train_data, matchup_data, test_years) {
   message("\n========== TUNED (hyperparameter search) ==========")
   if (!dir.exists(CONFIG_DIR)) dir.create(CONFIG_DIR, recursive = TRUE)
   set.seed(42)
   train_fct <- train_data %>% mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  folds <- vfold_cv(train_fct, v = 5, strata = outcome)
+  folds <- make_time_folds(train_fct, first_validation_year = TUNE_VALIDATION_FIRST_YEAR)
+  message("  Using time-based CV: ", length(folds$splits), " folds (expanding window by season)")
   comparison <- tibble()
   tuned_params <- list()
 
@@ -237,12 +300,16 @@ run_tuned <- function(train_data, matchup_data, test_years) {
 
     eval <- evaluate_model(model, matchup_data, test_years)
     if (!is.null(eval)) {
-      message("  Holdout accuracy: ", round(eval$accuracy * 100, 2), "% | Log loss: ", round(eval$log_loss, 4))
+      msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
+      if (!is.null(eval$accuracy_sd)) msg <- paste0(msg, " (mean across ", length(test_years), " years)")
+      message(sprintf(msg, eval$accuracy * 100, eval$log_loss))
       comparison <- bind_rows(comparison, tibble(
         Config = "tuned",
         Model = mt,
         Accuracy_Pct = round(eval$accuracy * 100, 2),
         LogLoss = round(eval$log_loss, 4),
+        Accuracy_SD = if (!is.null(eval$accuracy_sd)) round(eval$accuracy_sd * 100, 2) else NA_real_,
+        LogLoss_SD = if (!is.null(eval$log_loss_sd)) round(eval$log_loss_sd, 4) else NA_real_,
         N_Games = eval$n_games
       ))
     }
@@ -325,12 +392,33 @@ run_ensemble <- function(matchup_data, test_years, tuned_comp) {
   prob_win <- as.numeric(as.matrix(pred_df) %*% opt_weights)
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
   pred_class <- as.integer(prob_win >= 0.5)
-  correct <- pred_class == outcome_num
-  accuracy <- mean(correct)
+  test_data$pred_prob <- prob_win
+  test_data$pred_class <- pred_class
+  test_data$outcome_num <- outcome_num
+  test_data$correct <- pred_class == outcome_num
+  accuracy <- mean(test_data$correct)
   log_loss <- -mean(outcome_num * log(prob_win) + (1 - outcome_num) * log(1 - prob_win))
 
+  # Per-year stats for multi-year holdout
+  accuracy_sd <- NA_real_
+  log_loss_sd <- NA_real_
+  if ("Season" %in% names(test_data) && length(unique(test_data$Season)) > 1) {
+    per_yr <- test_data %>%
+      group_by(Season) %>%
+      summarise(
+        acc = mean(correct),
+        ll = -mean(outcome_num * log(pmax(eps, pmin(1 - eps, pred_prob))) +
+               (1 - outcome_num) * log(pmax(eps, pmin(1 - eps, 1 - pred_prob)))),
+        .groups = "drop"
+      )
+    accuracy_sd <- sd(per_yr$acc) * 100
+    log_loss_sd <- sd(per_yr$ll)
+  }
+
   message("  Optimized weights: ", paste(sprintf("%s=%.3f", names(opt_weights), opt_weights), collapse = ", "))
-  message("  Holdout accuracy: ", round(accuracy * 100, 2), "% | Log loss: ", round(log_loss, 4))
+  msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
+  if (!is.na(accuracy_sd)) msg <- paste0(msg, " (mean +/- SD)")
+  message(sprintf(msg, accuracy * 100, log_loss))
 
   ensemble_obj <- list(
     type = "ensemble",
@@ -346,6 +434,8 @@ run_ensemble <- function(matchup_data, test_years, tuned_comp) {
       Model = "ensemble",
       Accuracy_Pct = round(accuracy * 100, 2),
       LogLoss = round(log_loss, 4),
+      Accuracy_SD = if (!is.na(accuracy_sd)) round(accuracy_sd, 2) else NA_real_,
+      LogLoss_SD = if (!is.na(log_loss_sd)) round(log_loss_sd, 4) else NA_real_,
       N_Games = nrow(test_data)
     ),
     ensemble = ensemble_obj,
@@ -401,9 +491,9 @@ main <- function() {
     message("\nSaved ensemble weights to config/ensemble_weights.csv")
   }
 
-  # Combined comparison
+  # Combined comparison (include SD columns when present)
   both <- bind_rows(baseline_comp, tuned_comp, ensemble_comp) %>%
-    select(Config, Model, Accuracy_Pct, LogLoss, N_Games)
+    select(Config, Model, Accuracy_Pct, LogLoss, N_Games, any_of("Accuracy_SD"), any_of("LogLoss_SD"))
   write_csv(both, file.path(OUTPUT_DIR, "model_comparison.csv"))
   message("\n--- Baseline vs Tuned vs Ensemble Comparison ---")
   print(both)
@@ -450,25 +540,40 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
   today <- format(Sys.Date(), "%Y-%m-%d")
   n_games <- if (nrow(baseline_comp) > 0) baseline_comp$N_Games[1] else 63
 
+  fmt_metric <- function(val, sd_val) {
+    if (length(sd_val) == 0 || is.na(sd_val)) sprintf("%.2f", val) else sprintf("%.2f ± %.2f", val, sd_val)
+  }
+  fmt_ll <- function(val, sd_val) {
+    if (length(sd_val) == 0 || is.na(sd_val)) sprintf("%.4f", val) else sprintf("%.4f ± %.4f", val, sd_val)
+  }
+
   # Baseline models table
   baseline_md <- ""
   if (nrow(baseline_comp) > 0) {
-    baseline_md <- "| Model       | Config   | Accuracy | Log Loss |\n|-------------|----------|----------|----------|\n"
+    hdr <- "| Model       | Config   | Accuracy | Log Loss |\n|-------------|----------|----------|----------|\n"
+    baseline_md <- hdr
     for (i in seq_len(nrow(baseline_comp))) {
       r <- baseline_comp[i, ]
-      baseline_md <- paste0(baseline_md, "| ", r$Model, " | baseline | ", r$Accuracy_Pct, "% | ",
-                           round(r$LogLoss, 4), " |\n")
+      acc_sd <- if ("Accuracy_SD" %in% names(r)) r$Accuracy_SD else NA
+      ll_sd <- if ("LogLoss_SD" %in% names(r)) r$LogLoss_SD else NA
+      baseline_md <- paste0(baseline_md, "| ", r$Model, " | baseline | ",
+                             fmt_metric(r$Accuracy_Pct, acc_sd), "% | ",
+                             fmt_ll(r$LogLoss, ll_sd), " |\n")
     }
   }
 
   # Tuned models table
   tuned_md <- ""
   if (nrow(tuned_comp) > 0) {
-    tuned_md <- "| Model       | Config | Accuracy | Log Loss |\n|-------------|--------|----------|----------|\n"
+    hdr <- "| Model       | Config | Accuracy | Log Loss |\n|-------------|--------|----------|----------|\n"
+    tuned_md <- hdr
     for (i in seq_len(nrow(tuned_comp))) {
       r <- tuned_comp[i, ]
-      tuned_md <- paste0(tuned_md, "| ", r$Model, " | tuned | ", r$Accuracy_Pct, "% | ",
-                         round(r$LogLoss, 4), " |\n")
+      acc_sd <- if ("Accuracy_SD" %in% names(r)) r$Accuracy_SD else NA
+      ll_sd <- if ("LogLoss_SD" %in% names(r)) r$LogLoss_SD else NA
+      tuned_md <- paste0(tuned_md, "| ", r$Model, " | tuned | ",
+                         fmt_metric(r$Accuracy_Pct, acc_sd), "% | ",
+                         fmt_ll(r$LogLoss, ll_sd), " |\n")
     }
   }
 
@@ -477,18 +582,22 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
   best_config <- best_row$Source[1]
   best_acc <- best_row$Accuracy_Pct[1]
   best_ll <- best_row$LogLoss[1]
+  best_acc_sd <- if ("Accuracy_SD" %in% names(best_row)) best_row$Accuracy_SD[1] else NA
+  best_ll_sd <- if ("LogLoss_SD" %in% names(best_row)) best_row$LogLoss_SD[1] else NA
 
   ensemble_md <- ""
   if (!is.null(ensemble_out)) {
     ec <- ensemble_out$comparison
     ew <- ensemble_out$weights
+    ec_acc <- fmt_metric(ec$Accuracy_Pct[1], if ("Accuracy_SD" %in% names(ec)) ec$Accuracy_SD[1] else NA)
+    ec_ll <- fmt_ll(ec$LogLoss[1], if ("LogLoss_SD" %in% names(ec)) ec$LogLoss_SD[1] else NA)
     ensemble_md <- paste0(
       "\n---\n\n## Ensemble Results\n\n",
       "*Blended predictions from tuned GLM, XGBoost, and Random Forest. ",
       "Weights optimized to minimize log loss on holdout.*\n\n",
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",
-      "| Ensemble | ", ec$Accuracy_Pct[1], "% | ", round(ec$LogLoss[1], 4), " | ", ec$N_Games[1], " |\n\n",
+      "| Ensemble | ", ec_acc, "% | ", ec_ll, " | ", ec$N_Games[1], " |\n\n",
       "### Ensemble Weights\n\n",
       "| Model       | Weight  |\n",
       "|-------------|--------|\n"
@@ -502,7 +611,10 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
 
   content <- paste0(
     "# March Madness Model Performance\n\n",
-    "*Updated ", today, " — holdout: ", paste(test_years, collapse = ", "), ", ", n_games, " games*\n\n",
+    "*Updated ", today, "*\n\n",
+    "**Validation:** Time-based CV for tuning (expanding window by season). ",
+    "Holdout: ", paste(test_years, collapse = ", "), " (", n_games, " games total). ",
+    "Metrics show mean ± SD across holdout years when multiple.\n\n",
     "---\n\n",
     "## Baseline Reference (Original Feature Set)\n\n",
     "**This section is fixed and should never change.** It preserves the original baseline metrics ",
@@ -523,11 +635,11 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
     tuned_md, "\n",
     "---\n\n",
     "## Best Model\n\n",
-    "*Selected by lowest log loss.*\n\n",
+    "*Selected by lowest mean log loss across holdout years.*\n\n",
     "| Metric         | Model       | Config   | Accuracy | Log Loss |\n",
     "|----------------|-------------|----------|----------|----------|\n",
-    "| Best (log loss)| ", best_model_name, " | ", best_config, " | ", best_acc, "% | ",
-    round(best_ll, 4), " |\n",
+    "| Best (log loss)| ", best_model_name, " | ", best_config, " | ",
+    fmt_metric(best_acc, best_acc_sd), "% | ", fmt_ll(best_ll, best_ll_sd), " |\n",
     ensemble_md
   )
 

@@ -1,4 +1,4 @@
 Model,Weight
 glm,0
-xgboost,0
-rand_forest,1
+xgboost,0.31677164231242444
+rand_forest,0.6832283576875755

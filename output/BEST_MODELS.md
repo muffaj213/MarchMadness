@@ -1,6 +1,8 @@
 # March Madness Model Performance
 
-*Updated 2025-03-09 — holdout: 2024, 63 games*
+*Updated 2026-03-09*
+
+**Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple.
 
 ---
 
@@ -24,9 +26,9 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm         | baseline | 69.84%   | 0.5586   |
-| xgboost     | baseline | 76.19%   | 0.5609   |
-| rand_forest | baseline | 74.6%    | 0.5004   |
+| glm | baseline | 69.84 ± 1.59% | 0.5594 ± 0.0296 |
+| xgboost | baseline | 70.37 ± 1.83% | 0.6150 ± 0.0612 |
+| rand_forest | baseline | 71.96 ± 3.67% | 0.5458 ± 0.0353 |
 
 ---
 
@@ -36,19 +38,19 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm         | tuned  | 69.84%   | 0.5591   |
-| xgboost     | tuned  | 69.84%   | 0.5521   |
-| rand_forest | tuned  | 73.02%   | 0.5102   |
+| glm | tuned | 70.37 ± 3.67% | 0.5620 ± 0.0270 |
+| xgboost | tuned | 72.49 ± 3.30% | 0.5519 ± 0.0247 |
+| rand_forest | tuned | 71.96 ± 2.42% | 0.5451 ± 0.0292 |
 
 ---
 
 ## Best Model
 
-*Selected by lowest log loss.*
+*Selected by lowest mean log loss across holdout years.*
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| rand_forest | baseline | 74.6%    | 0.5004   |
+| Best (log loss)| ensemble | ensemble | 73.02 ± 2.75% | 0.5431 ± 0.0215 |
 
 ---
 
@@ -57,15 +59,16 @@
 *Blended predictions from tuned GLM, XGBoost, and Random Forest. Weights optimized to minimize log loss on holdout.*
 
 | Metric   | Accuracy | Log Loss | N Games |
-|----------|----------|----------|---------|
-| Ensemble | 73.02%   | 0.5102   | 63      |
+|----------|----------|----------|--------|
+| Ensemble | 73.02 ± 2.75% | 0.5431 ± 0.0215 | 189 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
-|-------------|---------|
-| glm         | 0.000   |
-| xgboost     | 0.000   |
-| rand_forest | 1.000   |
+|-------------|--------|
+| glm | 0.000 |
+| xgboost | 0.317 |
+| rand_forest | 0.683 |
 
-*Weights updated 2025-03-09*
+*Weights updated 2026-03-09*
+
