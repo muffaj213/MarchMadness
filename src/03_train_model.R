@@ -439,23 +439,45 @@ main <- function() {
   }
 
   # Update model tracker (BEST_MODELS.md)
-  save_best_models_report(best_row, ensemble_out, test_years)
+  save_best_models_report(baseline_comp, tuned_comp, ensemble_out, best_row, test_years)
 
   message("\nTraining complete. Compare config/model_config_baseline.csv vs config/model_config_tuned.csv")
 }
 
-#' Update BEST_MODELS.md with best model and ensemble results
-save_best_models_report <- function(best_row, ensemble_out, test_years) {
+#' Update BEST_MODELS.md with baseline, tuned, ensemble results and weights
+save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, best_row, test_years) {
   out_path <- file.path(OUTPUT_DIR, "BEST_MODELS.md")
   today <- format(Sys.Date(), "%Y-%m-%d")
+  n_games <- if (nrow(baseline_comp) > 0) baseline_comp$N_Games[1] else 63
 
-  # Best model section
-  best_acc <- best_row$Accuracy_Pct[1]
-  best_ll <- best_row$LogLoss[1]
+  # Baseline models table
+  baseline_md <- ""
+  if (nrow(baseline_comp) > 0) {
+    baseline_md <- "| Model       | Config   | Accuracy | Log Loss |\n|-------------|----------|----------|----------|\n"
+    for (i in seq_len(nrow(baseline_comp))) {
+      r <- baseline_comp[i, ]
+      baseline_md <- paste0(baseline_md, "| ", r$Model, " | baseline | ", r$Accuracy_Pct, "% | ",
+                           round(r$LogLoss, 4), " |\n")
+    }
+  }
+
+  # Tuned models table
+  tuned_md <- ""
+  if (nrow(tuned_comp) > 0) {
+    tuned_md <- "| Model       | Config | Accuracy | Log Loss |\n|-------------|--------|----------|----------|\n"
+    for (i in seq_len(nrow(tuned_comp))) {
+      r <- tuned_comp[i, ]
+      tuned_md <- paste0(tuned_md, "| ", r$Model, " | tuned | ", r$Accuracy_Pct, "% | ",
+                         round(r$LogLoss, 4), " |\n")
+    }
+  }
+
+  # Best model and ensemble section
   best_model_name <- best_row$Model[1]
   best_config <- best_row$Source[1]
+  best_acc <- best_row$Accuracy_Pct[1]
+  best_ll <- best_row$LogLoss[1]
 
-  # Ensemble section (if available)
   ensemble_md <- ""
   if (!is.null(ensemble_out)) {
     ec <- ensemble_out$comparison
@@ -467,7 +489,7 @@ save_best_models_report <- function(best_row, ensemble_out, test_years) {
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",
       "| Ensemble | ", ec$Accuracy_Pct[1], "% | ", round(ec$LogLoss[1], 4), " | ", ec$N_Games[1], " |\n\n",
-      "**Ensemble Weights**\n\n",
+      "### Ensemble Weights\n\n",
       "| Model       | Weight  |\n",
       "|-------------|--------|\n"
     )
@@ -480,6 +502,8 @@ save_best_models_report <- function(best_row, ensemble_out, test_years) {
 
   content <- paste0(
     "# March Madness Model Performance\n\n",
+    "*Updated ", today, " — holdout: ", paste(test_years, collapse = ", "), ", ", n_games, " games*\n\n",
+    "---\n\n",
     "## Baseline Reference (Original Feature Set)\n\n",
     "**This section is fixed and should never change.** It preserves the original baseline metrics ",
     "from the initial model configuration (seed, winpct, KenPom features only—before H2H, SOS, round, rest).\n\n",
@@ -490,12 +514,20 @@ save_best_models_report <- function(best_row, ensemble_out, test_years) {
     "| rand_forest | baseline | 68.2%    | 0.5499   |\n\n",
     "*2024 holdout, 63 games*\n\n",
     "---\n\n",
-    "## Best Model Performance\n\n",
-    "*Updated when training produces a model with lower log loss than the current best.*\n\n",
-    "| Metric         | Model       | Config   | Accuracy | Log Loss | Updated   |\n",
-    "|----------------|-------------|----------|----------|----------|----------|\n",
+    "## Baseline Models\n\n",
+    "*Current run — fixed parameters.*\n\n",
+    baseline_md, "\n",
+    "---\n\n",
+    "## Tuned Models\n\n",
+    "*Current run — hyperparameter tuned.*\n\n",
+    tuned_md, "\n",
+    "---\n\n",
+    "## Best Model\n\n",
+    "*Selected by lowest log loss.*\n\n",
+    "| Metric         | Model       | Config   | Accuracy | Log Loss |\n",
+    "|----------------|-------------|----------|----------|----------|\n",
     "| Best (log loss)| ", best_model_name, " | ", best_config, " | ", best_acc, "% | ",
-    round(best_ll, 4), " | ", today, " |\n",
+    round(best_ll, 4), " |\n",
     ensemble_md
   )
 
