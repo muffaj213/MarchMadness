@@ -38,12 +38,10 @@ compute_win_pct <- function(regular_results) {
 }
 
 #' Compute recent win percentage (last N games before tournament)
-#'
-#' @param regular_results Data frame with WTeamID, LTeamID, Season, DayNum
-#' @param n_games Number of most recent games to include
-#' @param tourney_start_day Exclude games on or after this DayNum
+#' With optional exponential decay: more recent games weighted higher.
+#' @param decay Decay factor for recency; 0 = flat average, >0 = exponential decay (e.g. 0.2)
 #' @return Data frame with TeamID, Season, RecentWinPct, RecentWins, RecentLosses, RecentGames
-compute_recent_win_pct <- function(regular_results, n_games = 10L, tourney_start_day = 134L) {
+compute_recent_win_pct <- function(regular_results, n_games = 10L, tourney_start_day = 134L, decay = 0.2) {
   if (!"DayNum" %in% names(regular_results) || nrow(regular_results) == 0) {
     return(tibble(Season = integer(), TeamID = integer(), RecentWinPct = numeric(),
                   RecentWins = integer(), RecentLosses = integer(), RecentGames = integer()))
@@ -64,20 +62,25 @@ compute_recent_win_pct <- function(regular_results, n_games = 10L, tourney_start
     arrange(Season, TeamID, desc(DayNum)) %>%
     group_by(Season, TeamID) %>%
     slice_head(n = n_games) %>%
+    mutate(
+      rank_recent = row_number(),
+      weight = if (decay > 0) exp(-decay * (rank_recent - 1)) else 1
+    ) %>%
     summarise(
       RecentWins = sum(Won),
       RecentGames = n(),
       RecentLosses = RecentGames - RecentWins,
-      RecentWinPct = if_else(RecentGames > 0, RecentWins / RecentGames, NA_real_),
+      RecentWinPct = if_else(RecentGames > 0, sum(Won * weight) / sum(weight), NA_real_),
       .groups = "drop"
     ) %>%
     select(Season, TeamID, RecentWinPct, RecentWins, RecentLosses, RecentGames)
 }
 
 #' Compute average margin of victory in last N games (positive = winning margins)
-#' Requires WScore, LScore in regular_results.
-#' @return Data frame with TeamID, Season, RecentMOV (avg pts margin per game)
-compute_recent_mov <- function(regular_results, n_games = 10L, tourney_start_day = 134L) {
+#' With optional exponential decay: more recent games weighted higher.
+#' @param decay Decay factor for recency; 0 = flat average, >0 = exponential decay (e.g. 0.2)
+#' @return Data frame with TeamID, Season, RecentMOV (weighted avg pts margin per game)
+compute_recent_mov <- function(regular_results, n_games = 10L, tourney_start_day = 134L, decay = 0.2) {
   if (!"DayNum" %in% names(regular_results) || !"WScore" %in% names(regular_results) || nrow(regular_results) == 0) {
     return(tibble(Season = integer(), TeamID = integer(), RecentMOV = numeric()))
   }
@@ -93,7 +96,14 @@ compute_recent_mov <- function(regular_results, n_games = 10L, tourney_start_day
     arrange(Season, TeamID, desc(DayNum)) %>%
     group_by(Season, TeamID) %>%
     slice_head(n = n_games) %>%
-    summarise(RecentMOV = mean(Margin, na.rm = TRUE), .groups = "drop")
+    mutate(
+      rank_recent = row_number(),  # 1 = most recent
+      weight = if (decay > 0) exp(-decay * (rank_recent - 1)) else 1
+    ) %>%
+    summarise(
+      RecentMOV = weighted.mean(Margin, w = weight, na.rm = TRUE),
+      .groups = "drop"
+    )
 }
 
 #' Compute late-season win percentage (last N days or last N games)
@@ -193,6 +203,23 @@ compute_sos <- function(regular_results, win_pct) {
     summarise(sos = mean(OppWinPct, na.rm = TRUE), .groups = "drop")
 }
 
+#' Compute teams that played in the First Four (DayNum 134-135)
+#' First Four teams have less rest before their R1 game.
+#' @param tourney_results Tournament results with DayNum
+#' @return Tibble Season, TeamID, played_first_four (1/0)
+compute_first_four_teams <- function(tourney_results) {
+  if (!"DayNum" %in% names(tourney_results) || nrow(tourney_results) == 0) {
+    return(tibble(Season = integer(), TeamID = integer(), played_first_four = integer()))
+  }
+  ff <- tourney_results %>%
+    filter(DayNum >= 134L, DayNum <= 135L) %>%
+    select(Season, WTeamID, LTeamID) %>%
+    pivot_longer(c(WTeamID, LTeamID), values_to = "TeamID") %>%
+    distinct(Season, TeamID) %>%
+    mutate(played_first_four = 1L)
+  ff
+}
+
 #' Compute days of rest before tournament (days since last regular-season game)
 #'
 #' @param regular_results Data frame with WTeamID, LTeamID, Season, DayNum
@@ -267,7 +294,8 @@ compute_points_stats <- function(regular_results) {
 #' @return Data frame with Season, TeamA, TeamB, seed_diff, winpct_diff, etc., outcome
 build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                               head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
-                              home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL) {
+                              home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
+                              conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL) {
   # Add seed numbers
   seeds <- seeds %>%
     mutate(SeedNum = parse_seed_number(Seed))
@@ -444,6 +472,47 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
   } else {
     games <- games %>% mutate(rest_diff = 0L)
   }
+  # Conference strength (BADJ EM by conference)
+  if (!is.null(conference_stats) && nrow(conference_stats) > 0) {
+    games <- games %>%
+      left_join(conference_stats %>% select(Season, TeamA = TeamID, conf_em_A = conf_em), by = c("Season", "TeamA")) %>%
+      left_join(conference_stats %>% select(Season, TeamB = TeamID, conf_em_B = conf_em), by = c("Season", "TeamB")) %>%
+      mutate(
+        conf_em_A = replace_na(conf_em_A, 0), conf_em_B = replace_na(conf_em_B, 0),
+        conf_em_diff = conf_em_A - conf_em_B
+      ) %>%
+      select(-conf_em_A, -conf_em_B)
+  } else {
+    games <- games %>% mutate(conf_em_diff = 0)
+  }
+  # Quadrant win rates (Q1, Q1+Q2)
+  if (!is.null(quadrant_stats) && nrow(quadrant_stats) > 0) {
+    games <- games %>%
+      left_join(quadrant_stats %>% select(Season, TeamA = TeamID, quad1_A = quad1_winpct, quad12_A = quad12_winpct), by = c("Season", "TeamA")) %>%
+      left_join(quadrant_stats %>% select(Season, TeamB = TeamID, quad1_B = quad1_winpct, quad12_B = quad12_winpct), by = c("Season", "TeamB")) %>%
+      mutate(
+        quad1_A = replace_na(quad1_A, 0.5), quad1_B = replace_na(quad1_B, 0.5),
+        quad12_A = replace_na(quad12_A, 0.5), quad12_B = replace_na(quad12_B, 0.5),
+        quad1_winpct_diff = quad1_A - quad1_B,
+        quad12_winpct_diff = quad12_A - quad12_B
+      ) %>%
+      select(-quad1_A, -quad1_B, -quad12_A, -quad12_B)
+  } else {
+    games <- games %>% mutate(quad1_winpct_diff = 0, quad12_winpct_diff = 0)
+  }
+  # Tournament rest: First Four teams (played DayNum 134-135) had less rest before R1
+  if (!is.null(first_four_stats) && nrow(first_four_stats) > 0) {
+    games <- games %>%
+      left_join(first_four_stats %>% select(Season, TeamA = TeamID, ff_A = played_first_four), by = c("Season", "TeamA")) %>%
+      left_join(first_four_stats %>% select(Season, TeamB = TeamID, ff_B = played_first_four), by = c("Season", "TeamB")) %>%
+      mutate(
+        ff_A = replace_na(ff_A, 0L), ff_B = replace_na(ff_B, 0L),
+        first_four_rest_diff = ff_B - ff_A
+      ) %>%
+      select(-ff_A, -ff_B)
+  } else {
+    games <- games %>% mutate(first_four_rest_diff = 0L)
+  }
 
   # Add home/away win rates if available
   if (!is.null(home_away_stats) && nrow(home_away_stats) > 0) {
@@ -543,7 +612,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     games <- games %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
              recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
-             sos_diff, rest_diff, home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
+             sos_diff, rest_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
+             home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
              adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction,
              round_seed_interaction, seed_barthag_interaction, seed_recentmov_interaction)
   } else {
@@ -559,7 +629,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       mutate(off_vs_def_adv = 0) %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
              recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
-             sos_diff, rest_diff, home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
+             sos_diff, rest_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
+             home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
              off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction, round_seed_interaction,
              seed_barthag_interaction, seed_recentmov_interaction)
 }
@@ -583,7 +654,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 #' @return Data frame with one row of features
 compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                                      head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
-                                     home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL, round = 1L) {
+                                     home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
+                                     conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL, round = 1L) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   seed_a <- seeds %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
@@ -675,6 +747,30 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     rest_b <- if (length(rest_b) > 0 && !is.na(rest_b[1])) rest_b[1] else 0L
     rest_diff_val <- as.integer(rest_a - rest_b)
   }
+  conf_em_diff_val <- 0
+  quad1_diff_val <- 0
+  quad12_diff_val <- 0
+  first_four_rest_diff_val <- 0L
+  if (!is.null(conference_stats) && nrow(conference_stats) > 0) {
+    ca <- conference_stats %>% filter(Season == season, TeamID == team_a) %>% pull(conf_em)
+    cb <- conference_stats %>% filter(Season == season, TeamID == team_b) %>% pull(conf_em)
+    conf_em_diff_val <- (if (length(ca) > 0 && !is.na(ca[1])) ca[1] else 0) - (if (length(cb) > 0 && !is.na(cb[1])) cb[1] else 0)
+  }
+  if (!is.null(quadrant_stats) && nrow(quadrant_stats) > 0) {
+    qa <- quadrant_stats %>% filter(Season == season, TeamID == team_a)
+    qb <- quadrant_stats %>% filter(Season == season, TeamID == team_b)
+    quad1_a <- if (nrow(qa) > 0) qa$quad1_winpct[1] else 0.5
+    quad1_b <- if (nrow(qb) > 0) qb$quad1_winpct[1] else 0.5
+    quad12_a <- if (nrow(qa) > 0) qa$quad12_winpct[1] else 0.5
+    quad12_b <- if (nrow(qb) > 0) qb$quad12_winpct[1] else 0.5
+    quad1_diff_val <- quad1_a - quad1_b
+    quad12_diff_val <- quad12_a - quad12_b
+  }
+  if (!is.null(first_four_stats) && nrow(first_four_stats) > 0) {
+    ff_a <- first_four_stats %>% filter(Season == season, TeamID == team_a) %>% pull(played_first_four)
+    ff_b <- first_four_stats %>% filter(Season == season, TeamID == team_b) %>% pull(played_first_four)
+    first_four_rest_diff_val <- as.integer((if (length(ff_b) > 0 && !is.na(ff_b[1])) ff_b[1] else 0) - (if (length(ff_a) > 0 && !is.na(ff_a[1])) ff_a[1] else 0))
+  }
 
   out <- tibble(
     round = round_num,
@@ -693,6 +789,10 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     h2h_games = h2h_games_val,
     sos_diff = sos_diff_val,
     rest_diff = rest_diff_val,
+    conf_em_diff = conf_em_diff_val,
+    quad1_winpct_diff = quad1_diff_val,
+    quad12_winpct_diff = quad12_diff_val,
+    first_four_rest_diff = first_four_rest_diff_val,
     home_win_rate_diff = 0,
     away_win_rate_diff = 0,
     elo_diff = 0,

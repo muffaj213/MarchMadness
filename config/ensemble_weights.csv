@@ -3,7 +3,7 @@ glm_baseline,0
 glm_tuned,0
 glmnet_baseline,0
 glmnet_tuned,0
-xgboost_baseline,0.841173994997612
-xgboost_tuned,0
-rand_forest_baseline,0.13390015335966104
-rand_forest_tuned,0.024925851642726985
+xgboost_baseline,0.8620101188254337
+xgboost_tuned,0.0024441396490482684
+rand_forest_baseline,0.11217630726682384
+rand_forest_tuned,0.023369434258694345

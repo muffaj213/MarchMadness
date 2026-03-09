@@ -318,6 +318,82 @@ load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup
   out
 }
 
+#' Load team-conference mapping and conference strength (BADJ EM)
+#' Uses KenPom Conference and raw_nishaa Conference Stats.csv
+#' @return Tibble Season, TeamID, conf_em (conference strength, higher = stronger conf)
+load_conference_strength <- function(lookup, conf_stats_path = NULL) {
+  if (is.null(conf_stats_path)) conf_stats_path <- here::here("data", "raw_nishaa", "Conference Stats.csv")
+  if (!file.exists(conf_stats_path)) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
+  conf <- read_csv(conf_stats_path, show_col_types = FALSE)
+  if (nrow(conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
+  em_col <- names(conf)[grepl("BADJ.*EM|BADJ_EM", names(conf), ignore.case = TRUE)][1]
+  if (is.na(em_col)) em_col <- "BADJ EM"
+  conf <- conf %>%
+    rename(Season = YEAR) %>%
+    mutate(conf_em = suppressWarnings(as.numeric(.data[[em_col]]))) %>%
+    select(Season, CONF, conf_em) %>%
+    filter(!is.na(conf_em))
+  # Team -> Conference from KenPom (github) and Barttorvik
+  team_conf <- tibble(Season = integer(), TeamID = integer(), Conference = character())
+  kp_path <- here::here("data", "raw_kenpom", "kenpom.csv")
+  if (file.exists(kp_path) && "Conference" %in% names(read_csv(kp_path, n_max = 1, show_col_types = FALSE))) {
+    kp <- read_csv(kp_path, show_col_types = FALSE) %>% rename(Season = Year)
+    kp$TeamID <- map_kenpom_to_teamids(kp, lookup)
+    team_conf <- kp %>% filter(!is.na(TeamID)) %>%
+      select(Season, TeamID, Conference) %>% distinct(Season, TeamID, .keep_all = TRUE)
+  }
+  bt_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
+  if (file.exists(bt_path) && "CONF" %in% names(read_csv(bt_path, n_max = 1, show_col_types = FALSE))) {
+    bt <- read_csv(bt_path, show_col_types = FALSE) %>%
+      rename(Season = YEAR, Team = TEAM, Conference = CONF)
+    bt$TeamID <- map_kenpom_to_teamids(bt, lookup)
+    bt_conf <- bt %>% filter(!is.na(TeamID)) %>%
+      select(Season, TeamID, Conference) %>% distinct(Season, TeamID, .keep_all = TRUE)
+    team_conf <- bind_rows(
+      team_conf %>% filter(!Season %in% bt_conf$Season),
+      bt_conf
+    )
+  }
+  if (nrow(team_conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
+  team_conf %>%
+    left_join(conf, by = c("Season", "Conference" = "CONF")) %>%
+    select(Season, TeamID, conf_em) %>%
+    filter(!is.na(conf_em))
+}
+
+#' Load quadrant win rates (Q1, Q1+Q2) from Teamsheet Ranks
+#' @return Tibble Season, TeamID, quad1_winpct, quad12_winpct
+load_quadrant_stats <- function(lookup, path = NULL) {
+  if (is.null(path)) path <- here::here("data", "raw_nishaa", "Teamsheet Ranks.csv")
+  if (!file.exists(path)) return(tibble(Season = integer(), TeamID = integer(), quad1_winpct = numeric(), quad12_winpct = numeric()))
+  ts <- read_csv(path, show_col_types = FALSE)
+  if (nrow(ts) == 0) return(tibble(Season = integer(), TeamID = integer(), quad1_winpct = numeric(), quad12_winpct = numeric()))
+  ts <- ts %>% rename(Season = YEAR, Team = TEAM)
+  q1w <- names(ts)[grep("^Q1\\s*W$|^Q1W$", names(ts), ignore.case = TRUE)][1]
+  if (is.na(q1w)) q1w <- names(ts)[grep("Q1.*W", names(ts), ignore.case = TRUE)][1]
+  q1l <- names(ts)[grep("^Q1\\s*L$|^Q1L$", names(ts), ignore.case = TRUE)][1]
+  if (is.na(q1l)) q1l <- names(ts)[grep("Q1.*L", names(ts), ignore.case = TRUE)][1]
+  q2w <- names(ts)[grep("^Q2\\s*W$|^Q2W$", names(ts), ignore.case = TRUE)][1]
+  if (is.na(q2w)) q2w <- names(ts)[grep("Q2.*W", names(ts), ignore.case = TRUE)][1]
+  q2l <- names(ts)[grep("^Q2\\s*L$|^Q2L$", names(ts), ignore.case = TRUE)][1]
+  if (is.na(q2l)) q2l <- names(ts)[grep("Q2.*L", names(ts), ignore.case = TRUE)][1]
+  if (is.na(q1w) || is.na(q1l)) return(tibble(Season = integer(), TeamID = integer(), quad1_winpct = numeric(), quad12_winpct = numeric()))
+  ts$TeamID <- map_kenpom_to_teamids(ts, lookup)
+  ts %>%
+    filter(!is.na(TeamID)) %>%
+    mutate(
+      Q1W = suppressWarnings(as.numeric(.data[[q1w]])),
+      Q1L = suppressWarnings(as.numeric(.data[[q1l]])),
+      Q2W = if (!is.na(q2w) && q2w %in% names(.)) suppressWarnings(as.numeric(.data[[q2w]])) else 0,
+      Q2L = if (!is.na(q2l) && q2l %in% names(.)) suppressWarnings(as.numeric(.data[[q2l]])) else 0
+    ) %>%
+    mutate(
+      quad1_winpct = if_else(Q1W + Q1L > 0, Q1W / (Q1W + Q1L), 0.5),
+      quad12_winpct = if_else(Q1W + Q1L + Q2W + Q2L > 0, (Q1W + Q2W) / (Q1W + Q1L + Q2W + Q2L), 0.5)
+    ) %>%
+    select(Season, TeamID, quad1_winpct, quad12_winpct)
+}
+
 #' Load BARTHAG and ELITE SOS from Barttorvik CSV (optional resume metrics)
 #' @return Tibble with Season, TeamID, barthag, elite_sos (or empty)
 load_barttorvik_resume_metrics <- function(bt_path = NULL, lookup) {

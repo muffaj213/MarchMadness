@@ -67,7 +67,9 @@ get_team_for_seed <- function(seed_id, seeds_df, season) {
 simulate_bracket <- function(season, slots_df, seeds_df, model,
                             win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                             recent_win_pct = NULL, recent_mov = NULL, home_away_stats = NULL, resume_stats = NULL,
-                            head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, deterministic = FALSE) {
+                            head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                            conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
+                            deterministic = FALSE) {
   # Load feature engineering (compute_matchup_features)
   fe_path <- here::here("src", "utils", "feature_engineering.R")
   if (file.exists(fe_path)) source(fe_path, local = TRUE)
@@ -110,6 +112,8 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                                          head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
                                          home_away_stats = home_away_stats, resume_stats = resume_stats,
                                          recent_win_pct = recent_win_pct, recent_mov = recent_mov,
+                                         conference_stats = conference_stats, quadrant_stats = quadrant_stats,
+                                         first_four_stats = first_four_stats,
                                          round = round_num)
 
     pred <- tryCatch(

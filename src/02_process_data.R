@@ -111,8 +111,8 @@ main <- function() {
   win_pct <- compute_win_pct(regular_results)
   points_stats <- compute_points_stats(regular_results)
   late_win_pct <- compute_late_win_pct(regular_results, day_cutoff = 90)
-  recent_win_pct <- compute_recent_win_pct(regular_results, n_games = 10L, tourney_start_day = 134L)
-  recent_mov <- compute_recent_mov(regular_results, n_games = 10L, tourney_start_day = 134L)
+  recent_win_pct <- compute_recent_win_pct(regular_results, n_games = 10L, tourney_start_day = 134L, decay = 0.2)
+  recent_mov <- compute_recent_mov(regular_results, n_games = 10L, tourney_start_day = 134L, decay = 0.2)
   if (nrow(late_win_pct) > 0) {
     message("  Late-season win pct: ", nrow(late_win_pct), " team-season rows (DayNum >= 90)")
   }
@@ -176,6 +176,14 @@ main <- function() {
   if (nrow(home_away_stats) > 0) message("  Home/away: ", nrow(home_away_stats), " team-season rows")
   if (nrow(resume_stats) > 0) message("  Resume (NET/ELO/WAB): ", nrow(resume_stats), " team-season rows")
 
+  message("Loading conference strength, quadrant stats, First Four...")
+  conference_stats <- load_conference_strength(lookup = lookup)
+  quadrant_stats <- load_quadrant_stats(lookup = lookup)
+  first_four_stats <- compute_first_four_teams(raw$tourney_results)
+  if (nrow(conference_stats) > 0) message("  Conference strength: ", nrow(conference_stats), " team-season rows")
+  if (nrow(quadrant_stats) > 0) message("  Quadrant stats: ", nrow(quadrant_stats), " team-season rows")
+  if (nrow(first_four_stats) > 0) message("  First Four teams: ", nrow(first_four_stats), " teams")
+
   message("Building matchup training data...")
   matchup_data <- build_matchup_data(
     tourney_results,
@@ -190,7 +198,10 @@ main <- function() {
     home_away_stats = home_away_stats,
     resume_stats = resume_stats,
     recent_win_pct = recent_win_pct,
-    recent_mov = recent_mov
+    recent_mov = recent_mov,
+    conference_stats = conference_stats,
+    quadrant_stats = quadrant_stats,
+    first_four_stats = first_four_stats
   )
 
   message("Saving processed data...")
@@ -214,6 +225,9 @@ main <- function() {
   if (nrow(rest_stats) > 0) write_csv(rest_stats, file.path(PROC_DIR, "rest_stats.csv"))
   if (nrow(home_away_stats) > 0) write_csv(home_away_stats, file.path(PROC_DIR, "home_away_stats.csv"))
   if (nrow(resume_stats) > 0) write_csv(resume_stats, file.path(PROC_DIR, "resume_stats.csv"))
+  if (nrow(conference_stats) > 0) write_csv(conference_stats, file.path(PROC_DIR, "conference_stats.csv"))
+  if (nrow(quadrant_stats) > 0) write_csv(quadrant_stats, file.path(PROC_DIR, "quadrant_stats.csv"))
+  if (nrow(first_four_stats) > 0) write_csv(first_four_stats, file.path(PROC_DIR, "first_four_stats.csv"))
 
   # Save seeds and slots for prediction (no processing needed)
   write_csv(raw$tourney_seeds, file.path(PROC_DIR, "tourney_seeds.csv"))

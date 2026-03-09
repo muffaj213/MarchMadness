@@ -92,6 +92,15 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else {
     NULL
   }
+  conference_stats <- if (file.exists(file.path(PROC_DIR, "conference_stats.csv"))) {
+    read_csv(file.path(PROC_DIR, "conference_stats.csv"), show_col_types = FALSE)
+  } else { NULL }
+  quadrant_stats <- if (file.exists(file.path(PROC_DIR, "quadrant_stats.csv"))) {
+    read_csv(file.path(PROC_DIR, "quadrant_stats.csv"), show_col_types = FALSE)
+  } else { NULL }
+  first_four_stats <- if (file.exists(file.path(PROC_DIR, "first_four_stats.csv"))) {
+    read_csv(file.path(PROC_DIR, "first_four_stats.csv"), show_col_types = FALSE)
+  } else { NULL }
 
   # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
   seeds_needed <- seeds %>% distinct(Season, TeamID)
@@ -132,7 +141,10 @@ load_for_prediction <- function(seeds_file = NULL) {
     resume_stats = resume_stats,
     head_to_head = head_to_head,
     sos_stats = sos_stats,
-    rest_stats = rest_stats
+    rest_stats = rest_stats,
+    conference_stats = conference_stats,
+    quadrant_stats = quadrant_stats,
+    first_four_stats = first_four_stats
   )
 }
 
@@ -183,6 +195,9 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     head_to_head = data$head_to_head,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
+    conference_stats = data$conference_stats,
+    quadrant_stats = data$quadrant_stats,
+    first_four_stats = data$first_four_stats,
     deterministic = deterministic
   )
 
