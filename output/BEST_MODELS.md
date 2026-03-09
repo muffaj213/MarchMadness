@@ -20,4 +20,24 @@
 
 | Metric         | Model       | Config | Accuracy | Log Loss | Updated   |
 |----------------|-------------|--------|----------|----------|-----------|
-| Best (log loss)| rand_forest | tuned  | 71.43%   | 0.559    | 2025-03-02 |
+| Best (log loss)| rand_forest | baseline | 74.6%    | 0.5004   | 2025-03-09 |
+
+---
+
+## Ensemble Results
+
+*Blended predictions from tuned GLM, XGBoost, and Random Forest. Weights optimized to minimize log loss on holdout.*
+
+| Metric   | Accuracy | Log Loss | N Games |
+|----------|----------|----------|---------|
+| Ensemble | 73.02%   | 0.5102   | 63      |
+
+**Ensemble Weights**
+
+| Model      | Weight |
+|------------|--------|
+| glm        | 0.000  |
+| xgboost    | 0.000  |
+| rand_forest| 1.000  |
+
+*Weights updated 2025-03-09*

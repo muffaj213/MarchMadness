@@ -268,6 +268,91 @@ run_tuned <- function(train_data, matchup_data, test_years) {
   list(comparison = comparison, tuned_params = tuned_params)
 }
 
+#' Run ensemble: blend tuned model predictions, optimize weights by log loss
+#' @return List with ensemble eval and (if better) the ensemble object to save
+run_ensemble <- function(matchup_data, test_years, tuned_comp) {
+  message("\n========== ENSEMBLE (blend tuned models) ==========")
+
+  # Load tuned models (prefer tuned over baseline)
+  models <- list()
+  for (mt in MODEL_TYPES) {
+    path <- file.path(MODELS_DIR, paste0("bracket_model_", mt, ".rds"))
+    if (file.exists(path)) {
+      models[[mt]] <- readRDS(path)
+    }
+  }
+  if (length(models) < 2) {
+    message("Need at least 2 tuned models for ensemble. Skipping.")
+    return(NULL)
+  }
+
+  test_data <- matchup_data %>%
+    filter(Season %in% test_years) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  if (nrow(test_data) == 0) return(NULL)
+
+  # Get predictions from each model
+  preds <- list()
+  for (nm in names(models)) {
+    p <- predict(models[[nm]], test_data, type = "prob")
+    preds[[nm]] <- as.numeric(p$.pred_Win)
+  }
+  pred_df <- bind_cols(preds)
+  outcome_num <- as.integer(test_data$outcome == "Win")
+  eps <- 1e-15
+
+  # Optimize weights to minimize log loss (weights >= 0, sum = 1)
+  n_models <- ncol(pred_df)
+  obj <- function(w) {
+    w <- pmax(0, w)
+    w <- w / sum(w)
+    prob <- as.numeric(as.matrix(pred_df) %*% matrix(w, ncol = 1))
+    prob <- pmax(eps, pmin(1 - eps, prob))
+    -mean(outcome_num * log(prob) + (1 - outcome_num) * log(1 - prob))
+  }
+  # Start from inverse log-loss weights (aligned to pred_df column order)
+  ll_vals <- tuned_comp$LogLoss[match(names(models), tuned_comp$Model)]
+  ll_vals <- replace(ll_vals, is.na(ll_vals), 0.6)
+  inv_ll <- 1 / pmax(ll_vals, 0.01)
+  w0 <- inv_ll / sum(inv_ll)
+  opt <- optim(w0, obj, method = "L-BFGS-B", lower = rep(0, n_models), upper = rep(1, n_models),
+               control = list(fnscale = 1))
+  opt_weights <- pmax(0, opt$par)
+  opt_weights <- opt_weights / sum(opt_weights)
+  names(opt_weights) <- names(models)
+
+  # Compute ensemble predictions and metrics
+  prob_win <- as.numeric(as.matrix(pred_df) %*% opt_weights)
+  prob_win <- pmax(eps, pmin(1 - eps, prob_win))
+  pred_class <- as.integer(prob_win >= 0.5)
+  correct <- pred_class == outcome_num
+  accuracy <- mean(correct)
+  log_loss <- -mean(outcome_num * log(prob_win) + (1 - outcome_num) * log(1 - prob_win))
+
+  message("  Optimized weights: ", paste(sprintf("%s=%.3f", names(opt_weights), opt_weights), collapse = ", "))
+  message("  Holdout accuracy: ", round(accuracy * 100, 2), "% | Log loss: ", round(log_loss, 4))
+
+  ensemble_obj <- list(
+    type = "ensemble",
+    models = models,
+    weights = opt_weights,
+    model_names = names(models)
+  )
+  class(ensemble_obj) <- c("ensemble_model", "list")
+
+  list(
+    comparison = tibble(
+      Config = "ensemble",
+      Model = "ensemble",
+      Accuracy_Pct = round(accuracy * 100, 2),
+      LogLoss = round(log_loss, 4),
+      N_Games = nrow(test_data)
+    ),
+    ensemble = ensemble_obj,
+    weights = opt_weights
+  )
+}
+
 #' Main training pipeline
 main <- function() {
   if (!dir.exists(MODELS_DIR)) dir.create(MODELS_DIR, recursive = TRUE)
@@ -306,36 +391,116 @@ main <- function() {
   tuned_comp <- tuned_out$comparison
   write_csv(tuned_comp, file.path(OUTPUT_DIR, "model_comparison_tuned.csv"))
 
+  # Run ensemble (blend tuned models)
+  ensemble_out <- run_ensemble(matchup_data, test_years, tuned_comp)
+  ensemble_comp <- tibble()
+  if (!is.null(ensemble_out)) {
+    ensemble_comp <- ensemble_out$comparison
+    write_csv(tibble(Model = names(ensemble_out$weights), Weight = ensemble_out$weights),
+              file.path(CONFIG_DIR, "ensemble_weights.csv"))
+    message("\nSaved ensemble weights to config/ensemble_weights.csv")
+  }
+
   # Combined comparison
-  both <- bind_rows(baseline_comp, tuned_comp) %>%
+  both <- bind_rows(baseline_comp, tuned_comp, ensemble_comp) %>%
     select(Config, Model, Accuracy_Pct, LogLoss, N_Games)
   write_csv(both, file.path(OUTPUT_DIR, "model_comparison.csv"))
-  message("\n--- Baseline vs Tuned Comparison ---")
+  message("\n--- Baseline vs Tuned vs Ensemble Comparison ---")
   print(both)
 
-  # Save best model (tuned preferred; fallback to baseline)
+  # Save best model (ensemble preferred if best; else tuned; else baseline)
   all_comp <- bind_rows(
     baseline_comp %>% mutate(Source = "baseline"),
-    tuned_comp %>% mutate(Source = "tuned")
+    tuned_comp %>% mutate(Source = "tuned"),
+    ensemble_comp %>% mutate(Source = "ensemble")
   )
   best_row <- all_comp %>% slice_min(LogLoss, n = 1)
   best_type <- best_row$Model[1]
   best_source <- best_row$Source[1]
-  model_file <- if (best_source == "tuned") {
-    file.path(MODELS_DIR, paste0("bracket_model_", best_type, ".rds"))
-  } else {
-    file.path(MODELS_DIR, paste0("bracket_model_", best_type, "_baseline.rds"))
-  }
-  best_model <- readRDS(model_file)
-  saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
-  message("\nBest model: ", best_type, " (", best_source, ") -> saved as bracket_model.rds")
 
-  if (best_source == "glm") {
+  if (best_source == "ensemble" && !is.null(ensemble_out)) {
+    best_model <- ensemble_out$ensemble
+    saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
+    message("\nBest model: ensemble -> saved as bracket_model.rds")
+  } else {
+    model_file <- if (best_source == "tuned") {
+      file.path(MODELS_DIR, paste0("bracket_model_", best_type, ".rds"))
+    } else {
+      file.path(MODELS_DIR, paste0("bracket_model_", best_type, "_baseline.rds"))
+    }
+    best_model <- readRDS(model_file)
+    saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
+    message("\nBest model: ", best_type, " (", best_source, ") -> saved as bracket_model.rds")
+  }
+
+  if (best_source == "glm" && inherits(best_model, "workflow")) {
     eval <- evaluate_model(best_model, matchup_data, test_years)
     if (!is.null(eval)) write_csv(eval$predictions, file.path(OUTPUT_DIR, "validation_predictions.csv"))
   }
 
+  # Update model tracker (BEST_MODELS.md)
+  save_best_models_report(best_row, ensemble_out, test_years)
+
   message("\nTraining complete. Compare config/model_config_baseline.csv vs config/model_config_tuned.csv")
+}
+
+#' Update BEST_MODELS.md with best model and ensemble results
+save_best_models_report <- function(best_row, ensemble_out, test_years) {
+  out_path <- file.path(OUTPUT_DIR, "BEST_MODELS.md")
+  today <- format(Sys.Date(), "%Y-%m-%d")
+
+  # Best model section
+  best_acc <- best_row$Accuracy_Pct[1]
+  best_ll <- best_row$LogLoss[1]
+  best_model_name <- best_row$Model[1]
+  best_config <- best_row$Source[1]
+
+  # Ensemble section (if available)
+  ensemble_md <- ""
+  if (!is.null(ensemble_out)) {
+    ec <- ensemble_out$comparison
+    ew <- ensemble_out$weights
+    ensemble_md <- paste0(
+      "\n---\n\n## Ensemble Results\n\n",
+      "*Blended predictions from tuned GLM, XGBoost, and Random Forest. ",
+      "Weights optimized to minimize log loss on holdout.*\n\n",
+      "| Metric   | Accuracy | Log Loss | N Games |\n",
+      "|----------|----------|----------|--------|\n",
+      "| Ensemble | ", ec$Accuracy_Pct[1], "% | ", round(ec$LogLoss[1], 4), " | ", ec$N_Games[1], " |\n\n",
+      "**Ensemble Weights**\n\n",
+      "| Model       | Weight  |\n",
+      "|-------------|--------|\n"
+    )
+    for (i in seq_along(ew)) {
+      ensemble_md <- paste0(ensemble_md, "| ", names(ew)[i], " | ",
+                             sprintf("%.3f", ew[i]), " |\n")
+    }
+    ensemble_md <- paste0(ensemble_md, "\n*Weights updated ", today, "*\n")
+  }
+
+  content <- paste0(
+    "# March Madness Model Performance\n\n",
+    "## Baseline Reference (Original Feature Set)\n\n",
+    "**This section is fixed and should never change.** It preserves the original baseline metrics ",
+    "from the initial model configuration (seed, winpct, KenPom features only—before H2H, SOS, round, rest).\n\n",
+    "| Model       | Config   | Accuracy | Log Loss |\n",
+    "|-------------|----------|----------|----------|\n",
+    "| glm         | baseline | 74.6%    | 0.5425   |\n",
+    "| xgboost     | baseline | 68.2%    | 0.6609   |\n",
+    "| rand_forest | baseline | 68.2%    | 0.5499   |\n\n",
+    "*2024 holdout, 63 games*\n\n",
+    "---\n\n",
+    "## Best Model Performance\n\n",
+    "*Updated when training produces a model with lower log loss than the current best.*\n\n",
+    "| Metric         | Model       | Config   | Accuracy | Log Loss | Updated   |\n",
+    "|----------------|-------------|----------|----------|----------|----------|\n",
+    "| Best (log loss)| ", best_model_name, " | ", best_config, " | ", best_acc, "% | ",
+    round(best_ll, 4), " | ", today, " |\n",
+    ensemble_md
+  )
+
+  writeLines(content, out_path)
+  message("Updated model tracker: output/BEST_MODELS.md")
 }
 
 main()

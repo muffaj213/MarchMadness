@@ -1,0 +1,4 @@
+Model,Weight
+glm,0
+xgboost,0
+rand_forest,1

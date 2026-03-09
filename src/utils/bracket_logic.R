@@ -9,6 +9,18 @@
 library(dplyr)
 library(purrr)
 
+#' Predict method for ensemble_model (blends sub-model probabilities)
+predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
+  if (type != "prob") stop("ensemble_model only supports type = 'prob'")
+  probs <- matrix(NA_real_, nrow = nrow(new_data), ncol = length(object$models))
+  for (i in seq_along(object$models)) {
+    p <- predict(object$models[[i]], new_data, type = "prob")
+    probs[, i] <- as.numeric(p$.pred_Win)
+  }
+  prob_win <- as.numeric(probs %*% object$weights)
+  tibble::tibble(.pred_Lose = 1 - prob_win, .pred_Win = prob_win)
+}
+
 #' Check if a slot/seed ID refers to a first-round seed (e.g., W01, X16)
 #' vs a prior-round slot (e.g., R1W1, R2W2)
 is_seed_ref <- function(id) {
@@ -90,7 +102,9 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     pred <- tryCatch(
       {
         pred_prob <- NULL
-        if (inherits(model, "workflow")) {
+        if (inherits(model, "ensemble_model")) {
+          pred_prob <- predict(model, new_data = features, type = "prob")
+        } else if (inherits(model, "workflow")) {
           pred_prob <- predict(model, new_data = features, type = "prob")
         } else if (inherits(model, "model_fit")) {
           pred_prob <- predict(model, features, type = "prob")
