@@ -7,6 +7,7 @@
 packages <- c(
   "tidyverse",   # dplyr, tidyr, readr, purrr
   "tidymodels",  # modeling workflow
+  "probably",    # probability calibration (Platt scaling, isotonic)
   "glmnet",      # regularized regression (optional alternative)
   "here",        # project paths
   "readxl",      # read Excel for projected bracket template

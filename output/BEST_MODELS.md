@@ -28,7 +28,7 @@
 |-------------|----------|----------|----------|
 | glm | baseline | 69.84 ± 1.59% | 0.5555 ± 0.0292 |
 | xgboost | baseline | 70.37 ± 2.42% | 0.6200 ± 0.0404 |
-| rand_forest | baseline | 72.49 ± 1.83% | 0.5485 ± 0.0406 |
+| rand_forest | baseline | 73.02 ± 1.59% | 0.5435 ± 0.0346 |
 
 ---
 
@@ -38,9 +38,9 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 70.90 ± 3.30% | 0.5617 ± 0.0258 |
-| xgboost | tuned | 71.43 ± 3.17% | 0.5416 ± 0.0042 |
-| rand_forest | tuned | 72.49 ± 3.30% | 0.5479 ± 0.0309 |
+| glm | tuned | 68.78 ± 1.83% | 0.5854 ± 0.0174 |
+| xgboost | tuned | 68.78 ± 4.85% | 0.5518 ± 0.0149 |
+| rand_forest | tuned | 73.02 ± 3.17% | 0.5460 ± 0.0370 |
 
 ---
 
@@ -50,17 +50,17 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| ensemble | ensemble | 73.54 ± 3.30% | 0.5396 ± 0.0113 |
+| Best (log loss)| rand_forest | baseline | 73.02 ± 1.59% | 0.5435 ± 0.0346 |
 
 ---
 
 ## Ensemble Results
 
-*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. Weights optimized to minimize log loss on holdout.*
+*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. Weights optimized on last CV fold (2021); probabilities calibrated when beneficial (Platt).*
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 73.54 ± 3.30% | 0.5396 ± 0.0113 | 189 |
+| Ensemble | 70.37 ± 2.42% | 0.6200 ± 0.0404 | 189 |
 
 ### Ensemble Weights
 
@@ -68,10 +68,10 @@
 |-------------|--------|
 | glm_baseline | 0.000 |
 | glm_tuned | 0.000 |
-| xgboost_baseline | 0.000 |
-| xgboost_tuned | 0.670 |
+| xgboost_baseline | 1.000 |
+| xgboost_tuned | 0.000 |
 | rand_forest_baseline | 0.000 |
-| rand_forest_tuned | 0.330 |
+| rand_forest_tuned | 0.000 |
 
 *Weights updated 2026-03-09*
 

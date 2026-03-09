@@ -263,19 +263,28 @@ run_tuned <- function(train_data, matchup_data, test_years) {
     wf <- build_tuned_workflow(mt, train_fct)
 
     grid <- switch(mt,
-      glm = grid_regular(penalty(), mixture(), levels = 3),
-      xgboost = grid_latin_hypercube(
-        trees(range = c(100, 500)),
-        min_n(range = c(2, 10)),
-        learn_rate(range = c(-2, -0.5), trans = log10_trans()),
-        tree_depth(range = c(3, 8)),
-        size = 12
+      glm = dplyr::bind_rows(
+        tibble(penalty = 0, mixture = 0),  # baseline in search space
+        grid_regular(penalty(), mixture(), levels = 3)
       ),
-      rand_forest = grid_latin_hypercube(
-        trees(range = c(300, 800)),
-        min_n(range = c(2, 15)),
-        mtry(range = c(2, 8)),
-        size = 12
+      xgboost = dplyr::bind_rows(
+        tibble(trees = 200, min_n = 5, learn_rate = 0.1, tree_depth = 6),  # baseline
+        grid_space_filling(
+          trees(range = c(100, 500)),
+          min_n(range = c(2, 10)),
+          learn_rate(range = c(-2, -0.5), trans = log10_trans()),
+          tree_depth(range = c(3, 8)),
+          size = 11
+        )
+      ),
+      rand_forest = dplyr::bind_rows(
+        tibble(trees = 500, min_n = 5, mtry = 4),  # baseline
+        grid_space_filling(
+          trees(range = c(300, 800)),
+          min_n(range = c(2, 15)),
+          mtry(range = c(2, 8)),
+          size = 11
+        )
       )
     )
 
@@ -291,7 +300,12 @@ run_tuned <- function(train_data, matchup_data, test_years) {
     )
     if (is.null(res)) next
 
-    best <- select_best(res, metric = "mn_log_loss")
+    best <- switch(mt,
+      glm = select_by_one_std_err(res, metric = "mn_log_loss", desc(penalty)),
+      xgboost = select_by_one_std_err(res, metric = "mn_log_loss", desc(trees), min_n),
+      rand_forest = select_by_one_std_err(res, metric = "mn_log_loss", desc(trees), min_n),
+      select_best(res, metric = "mn_log_loss")
+    )
     tuned_params[[mt]] <- best
     message("  Best params: ", paste(names(best), "=", best, collapse = ", "))
 
@@ -337,8 +351,9 @@ run_tuned <- function(train_data, matchup_data, test_years) {
 }
 
 #' Run ensemble: blend baseline + tuned model predictions, optimize weights by log loss
+#' Weights tuned on weight_tune_year (last CV fold, e.g. 2021); evaluated on test_years.
 #' @return List with ensemble eval and (if better) the ensemble object to save
-run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp) {
+run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, weight_tune_year = TRAIN_SEASONS_END) {
   message("\n========== ENSEMBLE (blend baseline + tuned models) ==========")
 
   # Load both baseline and tuned models into pool
@@ -358,23 +373,31 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp) {
     return(NULL)
   }
   message("  Pool: ", paste(names(models), collapse = ", "))
+  message("  Weight tuning on year ", weight_tune_year, " (CV fold); evaluation on ", paste(test_years, collapse = ", "))
 
-  test_data <- matchup_data %>%
-    filter(Season %in% test_years) %>%
+  # Data for weight tuning (last CV fold, not holdout)
+  weight_tune_data <- matchup_data %>%
+    filter(Season == weight_tune_year) %>%
     mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  if (nrow(test_data) == 0) return(NULL)
+  if (nrow(weight_tune_data) < 10) {
+    message("  Insufficient weight-tune data for year ", weight_tune_year, ". Falling back to first test year.")
+    weight_tune_year <- test_years[1]
+    weight_tune_data <- matchup_data %>%
+      filter(Season == weight_tune_year) %>%
+      mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  }
 
-  # Get predictions from each model
+  # Get predictions from each model for weight tuning
   preds <- list()
   for (nm in names(models)) {
-    p <- predict(models[[nm]], test_data, type = "prob")
+    p <- predict(models[[nm]], weight_tune_data, type = "prob")
     preds[[nm]] <- as.numeric(p$.pred_Win)
   }
   pred_df <- bind_cols(preds)
-  outcome_num <- as.integer(test_data$outcome == "Win")
+  outcome_num <- as.integer(weight_tune_data$outcome == "Win")
   eps <- 1e-15
 
-  # Optimize weights to minimize log loss (weights >= 0, sum = 1)
+  # Optimize weights to minimize log loss on weight-tune fold (weights >= 0, sum = 1)
   n_models <- ncol(pred_df)
   obj <- function(w) {
     w <- pmax(0, w)
@@ -403,16 +426,59 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp) {
   opt_weights <- opt_weights / sum(opt_weights)
   names(opt_weights) <- names(models)
 
-  # Compute ensemble predictions and metrics
-  prob_win <- as.numeric(as.matrix(pred_df) %*% opt_weights)
+  # Holdout data for evaluation (2022-2024, never used for weight tuning)
+  test_data <- matchup_data %>%
+    filter(Season %in% test_years) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  if (nrow(test_data) == 0) return(NULL)
+
+  # Get predictions on holdout and apply weights
+  test_preds <- list()
+  for (nm in names(models)) {
+    p <- predict(models[[nm]], test_data, type = "prob")
+    test_preds[[nm]] <- as.numeric(p$.pred_Win)
+  }
+  test_pred_df <- bind_cols(test_preds)
+  prob_win <- as.numeric(as.matrix(test_pred_df) %*% opt_weights)
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
+
+  # Fit probability calibration on weight-tune fold (2021); apply only when beneficial
+  # Skip when ensemble collapses to single model (calibration overfits easily on ~63 games)
+  cal_obj <- NULL
+  n_active <- sum(opt_weights > 0.05)
+  if (requireNamespace("probably", quietly = TRUE) && nrow(weight_tune_data) >= 30 && n_active >= 2) {
+    weight_tune_prob <- as.numeric(as.matrix(pred_df) %*% opt_weights)
+    weight_tune_prob <- pmax(eps, pmin(1 - eps, weight_tune_prob))
+    cal_df <- weight_tune_data %>%
+      mutate(.pred_Lose = 1 - weight_tune_prob, .pred_Win = weight_tune_prob)
+    cal_obj <- tryCatch(
+      suppressWarnings(probably::cal_estimate_logistic(cal_df, outcome, c(.pred_Lose, .pred_Win), smooth = FALSE)),
+      error = function(e) NULL
+    )
+    if (!is.null(cal_obj)) {
+      wt_calibrated <- probably::cal_apply(cal_df, cal_obj)
+      wt_ll_raw <- -mean(outcome_num * log(weight_tune_prob) + (1 - outcome_num) * log(1 - weight_tune_prob))
+      wt_ll_cal <- -mean(outcome_num * log(pmax(eps, as.numeric(wt_calibrated$.pred_Win))) +
+        (1 - outcome_num) * log(1 - pmin(1 - eps, as.numeric(wt_calibrated$.pred_Win))))
+      if (wt_ll_cal < wt_ll_raw * 1.02) {
+        test_cal_df <- tibble(.pred_Win = prob_win, .pred_Lose = 1 - prob_win)
+        calibrated <- probably::cal_apply(test_cal_df, cal_obj)
+        prob_win <- as.numeric(calibrated$.pred_Win)
+        prob_win <- pmax(eps, pmin(1 - eps, prob_win))
+        message("  Applied Platt scaling (calibration fit on year ", weight_tune_year, ")")
+      } else {
+        cal_obj <- NULL
+      }
+    }
+  }
+
   pred_class <- as.integer(prob_win >= 0.5)
   test_data$pred_prob <- prob_win
   test_data$pred_class <- pred_class
-  test_data$outcome_num <- outcome_num
-  test_data$correct <- pred_class == outcome_num
+  test_data$outcome_num <- as.integer(test_data$outcome == "Win")
+  test_data$correct <- pred_class == test_data$outcome_num
   accuracy <- mean(test_data$correct)
-  log_loss <- -mean(outcome_num * log(prob_win) + (1 - outcome_num) * log(1 - prob_win))
+  log_loss <- -mean(test_data$outcome_num * log(prob_win) + (1 - test_data$outcome_num) * log(1 - prob_win))
 
   # Per-year stats for multi-year holdout
   accuracy_sd <- NA_real_
@@ -439,7 +505,8 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp) {
     type = "ensemble",
     models = models,
     weights = opt_weights,
-    model_names = names(models)
+    model_names = names(models),
+    calibration = cal_obj  # Platt scaling fit on weight_tune_year; NULL if probably unavailable
   )
   class(ensemble_obj) <- c("ensemble_model", "list")
 
@@ -609,7 +676,7 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
     ensemble_md <- paste0(
       "\n---\n\n## Ensemble Results\n\n",
       "*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. ",
-      "Weights optimized to minimize log loss on holdout.*\n\n",
+      "Weights optimized on last CV fold (2021); probabilities calibrated when beneficial (Platt).*\n\n",
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",
       "| Ensemble | ", ec_acc, "% | ", ec_ll, " | ", ec$N_Games[1], " |\n\n",

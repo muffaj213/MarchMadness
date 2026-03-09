@@ -10,6 +10,7 @@ library(dplyr)
 library(purrr)
 
 #' Predict method for ensemble_model (blends sub-model probabilities)
+#' Applies Platt scaling calibration if object$calibration is present.
 predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
   if (type != "prob") stop("ensemble_model only supports type = 'prob'")
   probs <- matrix(NA_real_, nrow = nrow(new_data), ncol = length(object$models))
@@ -18,6 +19,14 @@ predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
     probs[, i] <- as.numeric(p$.pred_Win)
   }
   prob_win <- as.numeric(probs %*% object$weights)
+  eps <- 1e-15
+  prob_win <- pmax(eps, pmin(1 - eps, prob_win))
+  if (!is.null(object$calibration) && requireNamespace("probably", quietly = TRUE)) {
+    cal_df <- tibble::tibble(.pred_Win = prob_win, .pred_Lose = 1 - prob_win)
+    calibrated <- probably::cal_apply(cal_df, object$calibration)
+    prob_win <- as.numeric(calibrated$.pred_Win)
+    prob_win <- pmax(eps, pmin(1 - eps, prob_win))
+  }
   tibble::tibble(.pred_Lose = 1 - prob_win, .pred_Win = prob_win)
 }
 
