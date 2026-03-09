@@ -4,11 +4,11 @@ tuned,glm,mixture,0
 tuned,glm,.config,pre0_mod08_post0
 tuned,glmnet,penalty,0.0263665089873036
 tuned,glmnet,.config,pre0_mod17_post0
-tuned,xgboost,trees,300
-tuned,xgboost,min_n,6
-tuned,xgboost,tree_depth,7
-tuned,xgboost,learn_rate,0.01
-tuned,xgboost,.config,pre0_mod07_post0
+tuned,xgboost,trees,260
+tuned,xgboost,min_n,7
+tuned,xgboost,tree_depth,3
+tuned,xgboost,learn_rate,0.0141253754462275
+tuned,xgboost,.config,pre0_mod06_post0
 tuned,rand_forest,mtry,4
 tuned,rand_forest,trees,800
 tuned,rand_forest,min_n,11

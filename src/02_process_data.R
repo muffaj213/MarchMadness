@@ -9,6 +9,8 @@ library(dplyr)
 # Source utilities
 source(here("src", "utils", "feature_engineering.R"))
 source(here("src", "utils", "kenpom_utils.R"))
+source(here("src", "utils", "bracket_slots.R"))
+source(here("src", "utils", "merge_68team_seeds.R"))
 
 RAW_DIR <- here("data", "raw")
 RAW_EXTENDED_DIR <- here("data", "raw_extended")
@@ -85,6 +87,14 @@ main <- function() {
 
   message("Reading raw data...")
   raw <- read_raw_data()
+
+  # Merge 68-team seeds from raw_historical (2011-2016) when team_id_master exists
+  tourney_seeds <- merge_68team_seeds_if_available(raw$tourney_seeds)
+  if (!identical(tourney_seeds, raw$tourney_seeds)) {
+    n_68 <- tourney_seeds %>% filter(Season >= 2011L, Season <= 2016L) %>% nrow()
+    message("  Merged ", n_68, " 68-team seeds from raw_historical (2011-2016)")
+  }
+  raw$tourney_seeds <- tourney_seeds
 
   # Normalize column names (some Kaggle versions use different names)
   tourney_results <- raw$tourney_results
@@ -229,10 +239,23 @@ main <- function() {
   if (nrow(quadrant_stats) > 0) write_csv(quadrant_stats, file.path(PROC_DIR, "quadrant_stats.csv"))
   if (nrow(first_four_stats) > 0) write_csv(first_four_stats, file.path(PROC_DIR, "first_four_stats.csv"))
 
-  # Save seeds and slots for prediction (no processing needed)
+  # Save seeds and slots for prediction
+  # Build 68-team slots for 2011+ (First Four play-in games)
+  seasons_in_seeds <- unique(raw$tourney_seeds$Season)
+  slots_list <- lapply(seasons_in_seeds, function(yr) {
+    s <- get_slots_for_season(yr, raw$tourney_slots)
+    s$Season <- yr
+    s
+  })
+  tourney_slots_out <- bind_rows(slots_list) %>%
+    select(Season, Slot, StrongSeed, WeakSeed)
   write_csv(raw$tourney_seeds, file.path(PROC_DIR, "tourney_seeds.csv"))
-  write_csv(raw$tourney_slots, file.path(PROC_DIR, "tourney_slots.csv"))
+  write_csv(tourney_slots_out, file.path(PROC_DIR, "tourney_slots.csv"))
   write_csv(raw$teams, file.path(PROC_DIR, "teams.csv"))
+  n_68 <- sum(seasons_in_seeds >= 2011L)
+  if (n_68 > 0) {
+    message("  68-team slots (First Four) for ", n_68, " seasons (2011+)")
+  }
 
   # Build team name master table for ESPN/KenPom -> TeamID resolution
   if (file.exists(here("scripts", "build_team_master.R"))) {

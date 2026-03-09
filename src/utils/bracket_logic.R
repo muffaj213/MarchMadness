@@ -1,9 +1,9 @@
 # =============================================================================
 # bracket_logic.R - Bracket structure and simulation for NCAA tournament
 # =============================================================================
-# Builds the 64-team single-elimination bracket from seeds/slots and
-# simulates games using model predictions. Processes slots sequentially
-# so Round 2+ games use winners from prior rounds.
+# Supports 64-team (pre-2011) and 68-team (2011+) formats including First Four
+# play-in games. Processes slots in dependency order: play-in slots first,
+# then R1-R6, so Round 2+ use winners from prior rounds.
 # =============================================================================
 
 library(dplyr)
@@ -30,20 +30,23 @@ predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
   tibble::tibble(.pred_Lose = 1 - prob_win, .pred_Win = prob_win)
 }
 
-#' Check if a slot/seed ID refers to a first-round seed (e.g., W01, X16)
+#' Check if a slot/seed ID refers to a first-round seed (e.g., W01, X16, W16a)
 #' vs a prior-round slot (e.g., R1W1, R2W2)
 is_seed_ref <- function(id) {
   id <- as.character(id)
-  # Seeds: W01, X02, Y16, Z16 (region letter + number)
+  # Seeds: W01, X02, Y16, W16a, W16b (region + number, optional a/b for play-in)
   # Slots: R1W1, R2W2, R3W1, R4W1, R5, R6
-  grepl("^[WXYZ][0-9]+$", id, ignore.case = TRUE)
+  grepl("^[WXYZ][0-9]+[ab]?$", id, ignore.case = TRUE)
 }
 
 #' Get team ID for a seed in a given season
+#' Handles both TeamID and Team column (raw_historical format)
 get_team_for_seed <- function(seed_id, seeds_df, season) {
   row <- seeds_df %>% filter(Season == season, Seed == as.character(seed_id))
   if (nrow(row) == 0) return(NA_integer_)
-  row$TeamID[1]
+  id_col <- intersect(names(row), c("TeamID", "Team"))[1]
+  if (is.na(id_col)) return(NA_integer_)
+  as.integer(row[[id_col]][1])
 }
 
 #' Simulate entire bracket for a season
@@ -74,15 +77,23 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
   fe_path <- here::here("src", "utils", "feature_engineering.R")
   if (file.exists(fe_path)) source(fe_path, local = TRUE)
 
-  # Handle column names (Kaggle datasets vary)
+  # Handle column names (Kaggle/raw_historical vary: Slot,StrongSeed,WeakSeed or Season,Slot,Strongseed,Weakseed)
   slots <- as.data.frame(slots_df)
   nm <- names(slots)
-  if (length(nm) >= 3) {
-    slots <- slots %>%
-      rename(Slot = !!sym(nm[1]), Strong = !!sym(nm[2]), Weak = !!sym(nm[3]))
+  slot_col <- { x <- intersect(nm, c("Slot", "slot")); if (length(x) > 0) x[1] else NULL }
+  strong_col <- { x <- intersect(nm, c("Strong", "StrongSeed", "Strongseed")); if (length(x) > 0) x[1] else NULL }
+  weak_col <- { x <- intersect(nm, c("Weak", "WeakSeed", "Weakseed")); if (length(x) > 0) x[1] else NULL }
+  if (!is.null(slot_col) && !is.null(strong_col) && !is.null(weak_col)) {
+    slots <- slots %>% rename(Slot = !!sym(slot_col), Strong = !!sym(strong_col), Weak = !!sym(weak_col))
+  } else if (length(nm) >= 3) {
+    slots <- slots %>% rename(Slot = !!sym(nm[1]), Strong = !!sym(nm[2]), Weak = !!sym(nm[3]))
   }
+  slots <- slots %>% select(Slot, Strong, Weak)
 
-  slots <- slots %>% arrange(Slot)
+  # Process play-in slots first (e.g. W16, W11, Y11, Z16) so R1 slots can resolve their winners
+  slots <- slots %>%
+    mutate(is_playin = !grepl("^R[0-9]", Slot)) %>%
+    arrange(desc(is_playin), Slot)
   slot_winners <- list()
   results <- list()
 
@@ -91,23 +102,28 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     strong <- as.character(slots$Strong[i])
     weak <- as.character(slots$Weak[i])
 
-    team_a <- if (is_seed_ref(strong)) {
+    # Check slot_winners first (play-in winners); then seeds (64-team or direct seeds)
+    team_a <- if (!is.null(slot_winners[[strong]])) {
+      slot_winners[[strong]]
+    } else if (is_seed_ref(strong)) {
       get_team_for_seed(strong, seeds_df, season)
     } else {
-      slot_winners[[strong]]
+      NA_integer_
     }
 
-    team_b <- if (is_seed_ref(weak)) {
+    team_b <- if (!is.null(slot_winners[[weak]])) {
+      slot_winners[[weak]]
+    } else if (is_seed_ref(weak)) {
       get_team_for_seed(weak, seeds_df, season)
     } else {
-      slot_winners[[weak]]
+      NA_integer_
     }
 
     if (is.na(team_a) || is.na(team_b)) next
 
-    # Derive round from slot (R1 -> 1, R2 -> 2, ..., R6 -> 6)
+    # Derive round from slot: play-in (W16, Y11, etc.) = 0; R1 = 1, R2 = 2, ..., R6 = 6
     round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
-    if (is.na(round_num)) round_num <- 1L
+    if (is.na(round_num)) round_num <- 0L  # First Four play-in games
     features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct,
                                          head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
                                          home_away_stats = home_away_stats, resume_stats = resume_stats,
@@ -151,6 +167,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     slot_winners[[slot]] <- winner
     results[[length(results) + 1]] <- tibble::tibble(
       slot = slot,
+      round = round_num,
       team_a = team_a,
       team_b = team_b,
       winner = winner,
