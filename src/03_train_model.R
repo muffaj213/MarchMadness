@@ -1,7 +1,7 @@
 # =============================================================================
 # 03_train_model.R - Train and validate NCAA tournament prediction model
 # =============================================================================
-# Trains glm, xgboost, and rand_forest. Runs BASELINE (fixed params) and TUNED
+# Trains glm, glmnet (LASSO), xgboost, rand_forest. Runs BASELINE and TUNED.
 # (hyperparameter search) configurations. Saves both for comparison.
 # Best model (by log loss) saved as bracket_model.rds for prediction.
 # =============================================================================
@@ -27,14 +27,15 @@ TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train y
 WEIGHT_TUNE_YEARS <- c(2019L, 2020L, 2021L)  # Multiple years for weight tuning (avoids overfitting to single year)
 ENTROPY_REGULARIZATION <- 0.03  # Penalize weight concentration; higher = more uniform weights
 SKIP_ENSEMBLE_CALIBRATION <- TRUE  # Platt scaling overfits on ~120 games; skip until we have more data
-MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
+MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
                        "is_upset_matchup", "upset_seed_gap", "seed_winpct_interaction", "pf_diff", "round",
                        "h2h_team_a_winpct", "h2h_games", "sos_diff", "rest_diff")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
-                         "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction")
+                         "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction",
+                         "seed_barthag_interaction", "seed_recentmov_interaction")
 
 # -----------------------------------------------------------------------------
 # BASELINE: Fixed parameters (original setup)
@@ -45,6 +46,12 @@ BASELINE_SPECS <- list(
     mixture = 0,
     engine = "glm",
     note = "Unregularized logistic regression"
+  ),
+  glmnet = list(
+    penalty = 0.01,
+    mixture = 1,
+    engine = "glmnet",
+    note = "LASSO (L1) for feature selection"
   ),
   xgboost = list(
     trees = 200,
@@ -74,10 +81,12 @@ build_baseline_workflow <- function(model_type, matchup_data) {
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = 0, mixture = 0) %>% set_engine("glm"),
+    glmnet = logistic_reg(penalty = 0.01, mixture = 1) %>% set_engine("glmnet"),
     xgboost = boost_tree(mode = "classification", engine = "xgboost",
                         trees = 200, min_n = 5, learn_rate = 0.1),
     rand_forest = rand_forest(mode = "classification", engine = "ranger",
-                             trees = 500, min_n = 5),
+                             trees = 500, min_n = 5) %>%
+      set_engine("ranger", importance = "impurity"),
     stop("Unknown model_type: ", model_type)
   )
 
@@ -99,11 +108,13 @@ build_tuned_workflow <- function(model_type, matchup_data) {
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = tune(), mixture = tune()) %>% set_engine("glmnet"),
+    glmnet = logistic_reg(penalty = tune(), mixture = 1) %>% set_engine("glmnet"),  # LASSO: mixture=1
     xgboost = boost_tree(mode = "classification", engine = "xgboost",
                         trees = tune(), min_n = tune(), learn_rate = tune(),
                         tree_depth = tune()),
     rand_forest = rand_forest(mode = "classification", engine = "ranger",
-                             trees = tune(), min_n = tune(), mtry = tune()),
+                             trees = tune(), min_n = tune(), mtry = tune()) %>%
+      set_engine("ranger", importance = "impurity"),
     stop("Unknown model_type: ", model_type)
   )
 
@@ -270,6 +281,7 @@ run_tuned <- function(train_data, matchup_data, test_years) {
         tibble(penalty = 0, mixture = 0),  # baseline in search space
         grid_regular(penalty(), mixture(), levels = 3)
       ),
+      glmnet = grid_regular(penalty(), levels = 20),  # LASSO: tune penalty only (mixture=1 fixed)
       xgboost = dplyr::bind_rows(
         tibble(trees = 200, min_n = 5, learn_rate = 0.1, tree_depth = 6),  # baseline
         grid_space_filling(
@@ -305,6 +317,7 @@ run_tuned <- function(train_data, matchup_data, test_years) {
 
     best <- switch(mt,
       glm = select_by_one_std_err(res, metric = "mn_log_loss", desc(penalty)),
+      glmnet = select_by_one_std_err(res, metric = "mn_log_loss", desc(penalty)),
       xgboost = select_by_one_std_err(res, metric = "mn_log_loss", desc(trees), min_n),
       rand_forest = select_by_one_std_err(res, metric = "mn_log_loss", desc(trees), min_n),
       select_best(res, metric = "mn_log_loss")
@@ -538,6 +551,58 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   )
 }
 
+#' Compute and save variable importance (permutation or model-based)
+#' Uses best rand_forest model for tree importance; glmnet for coefficient-based selection.
+save_feature_importance <- function(matchup_data, test_years) {
+  message("\n========== FEATURE IMPORTANCE ==========")
+  train_fct <- matchup_data %>%
+    filter(Season <= TRAIN_SEASONS_END) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  all_feat <- c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS, EXTRA_FEATURE_COLS)
+  avail <- intersect(all_feat, names(train_fct))
+  if (length(avail) < 2) return(invisible(NULL))
+
+  # 1. Random Forest: model-based importance (ranger impurity)
+  rf_path <- file.path(MODELS_DIR, "bracket_model_rand_forest.rds")
+  if (file.exists(rf_path) && requireNamespace("vip", quietly = TRUE)) {
+    rf <- readRDS(rf_path)
+    rf_fit <- extract_fit_parsnip(rf)
+    vi_rf <- tryCatch(
+      vip::vi(rf_fit, method = "model", sort = TRUE),
+      error = function(e) {
+        tryCatch(vip::vi(rf_fit, sort = TRUE), error = function(e2) NULL)
+      }
+    )
+    if (!is.null(vi_rf) && nrow(vi_rf) > 0) {
+      vi_rf <- vi_rf %>% mutate(Model = "rand_forest", .before = 1)
+      write_csv(vi_rf, file.path(OUTPUT_DIR, "feature_importance_rf.csv"))
+      message("  Saved rand_forest importance: output/feature_importance_rf.csv")
+    }
+  }
+
+  # 2. GLMnet: non-zero coefficients (LASSO feature selection)
+  glmnet_path <- file.path(MODELS_DIR, "bracket_model_glmnet.rds")
+  if (file.exists(glmnet_path)) {
+    glmnet_wf <- readRDS(glmnet_path)
+    glmnet_fit <- extract_fit_parsnip(glmnet_wf)
+    cf_tidy <- tryCatch(broom::tidy(glmnet_fit), error = function(e) NULL)
+    if (!is.null(cf_tidy) && nrow(cf_tidy) > 0) {
+      # Filter to non-intercept, non-zero coefficients (broom may add 'class' for logistic)
+      glmnet_vi <- cf_tidy %>%
+        filter(term != "(Intercept)", abs(estimate) > 1e-6) %>%
+        rename(Variable = term, Coefficient = estimate) %>%
+        select(Variable, Coefficient, any_of("penalty")) %>%
+        mutate(Model = "glmnet") %>%
+        arrange(desc(abs(Coefficient)))
+      if (nrow(glmnet_vi) > 0) {
+        write_csv(glmnet_vi, file.path(OUTPUT_DIR, "feature_importance_glmnet.csv"))
+        message("  Saved glmnet non-zero coeffs: output/feature_importance_glmnet.csv (", nrow(glmnet_vi), " features)")
+      }
+    }
+  }
+  invisible(NULL)
+}
+
 #' Main training pipeline
 main <- function() {
   if (!dir.exists(MODELS_DIR)) dir.create(MODELS_DIR, recursive = TRUE)
@@ -625,6 +690,9 @@ main <- function() {
 
   # Update model tracker (BEST_MODELS.md)
   save_best_models_report(baseline_comp, tuned_comp, ensemble_out, best_row, test_years)
+
+  # Feature importance (RF impurity, glmnet coefficients)
+  save_feature_importance(matchup_data, test_years)
 
   message("\nTraining complete. Compare config/model_config_baseline.csv vs config/model_config_tuned.csv")
 }

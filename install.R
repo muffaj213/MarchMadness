@@ -8,7 +8,8 @@ packages <- c(
   "tidyverse",   # dplyr, tidyr, readr, purrr
   "tidymodels",  # modeling workflow
   "probably",    # probability calibration (Platt scaling, isotonic)
-  "glmnet",      # regularized regression (optional alternative)
+  "glmnet",      # regularized regression (LASSO/elastic net)
+  "vip",         # variable importance (permutation, model-based)
   "here",        # project paths
   "readxl",      # read Excel for projected bracket template
   "xgboost",     # gradient boosting for xgboost model

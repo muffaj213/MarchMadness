@@ -26,9 +26,10 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 71.96 ± 5.10% | 0.5471 ± 0.0431 |
-| xgboost | baseline | 68.25 ± 6.92% | 0.6431 ± 0.0848 |
-| rand_forest | baseline | 71.96 ± 3.30% | 0.5483 ± 0.0386 |
+| glm | baseline | 71.96 ± 5.10% | 0.5499 ± 0.0369 |
+| glmnet | baseline | 71.43 ± 1.59% | 0.5541 ± 0.0178 |
+| xgboost | baseline | 66.67 ± 6.92% | 0.6681 ± 0.0933 |
+| rand_forest | baseline | 72.49 ± 6.61% | 0.5606 ± 0.0352 |
 
 ---
 
@@ -38,9 +39,10 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 68.78 ± 1.83% | 0.5848 ± 0.0165 |
-| xgboost | tuned | 70.37 ± 2.42% | 0.5614 ± 0.0338 |
-| rand_forest | tuned | 72.49 ± 2.42% | 0.5454 ± 0.0390 |
+| glm | tuned | 68.78 ± 1.83% | 0.5854 ± 0.0163 |
+| glmnet | tuned | 70.37 ± 2.42% | 0.5559 ± 0.0097 |
+| xgboost | tuned | 71.43 ± 5.72% | 0.5629 ± 0.0255 |
+| rand_forest | tuned | 74.60 ± 4.20% | 0.5547 ± 0.0366 |
 
 ---
 
@@ -50,7 +52,7 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| rand_forest | tuned | 72.49 ± 2.42% | 0.5454 ± 0.0390 |
+| Best (log loss)| glm | baseline | 71.96 ± 5.10% | 0.5499 ± 0.0369 |
 
 ---
 
@@ -60,7 +62,7 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 68.25 ± 6.92% | 0.6102 ± 0.0729 | 189 |
+| Ensemble | 67.20 ± 6.01% | 0.6275 ± 0.0829 | 189 |
 
 ### Ensemble Weights
 
@@ -68,10 +70,12 @@
 |-------------|--------|
 | glm_baseline | 0.000 |
 | glm_tuned | 0.000 |
-| xgboost_baseline | 0.859 |
-| xgboost_tuned | 0.002 |
-| rand_forest_baseline | 0.113 |
-| rand_forest_tuned | 0.027 |
+| glmnet_baseline | 0.000 |
+| glmnet_tuned | 0.000 |
+| xgboost_baseline | 0.841 |
+| xgboost_tuned | 0.000 |
+| rand_forest_baseline | 0.134 |
+| rand_forest_tuned | 0.025 |
 
 *Weights updated 2026-03-09*
 

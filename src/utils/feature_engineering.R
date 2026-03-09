@@ -536,27 +536,32 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
         seed_winpct_interaction = seed_diff * winpct_diff,
         adjem_seed_interaction = adjem_diff * seed_diff,
         seed_latewinpct_interaction = seed_diff * late_winpct_diff,
-        round_seed_interaction = round * seed_diff
+        round_seed_interaction = round * seed_diff,
+        seed_barthag_interaction = seed_diff * barthag_diff,
+        seed_recentmov_interaction = seed_diff * recent_mov_diff
       )
     games <- games %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
              recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
              sos_diff, rest_diff, home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
              adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction,
-             round_seed_interaction)
+             round_seed_interaction, seed_barthag_interaction, seed_recentmov_interaction)
   } else {
     games <- games %>%
       mutate(
         seed_winpct_interaction = seed_diff * winpct_diff,
         adjem_seed_interaction = 0,
         seed_latewinpct_interaction = seed_diff * late_winpct_diff,
-        round_seed_interaction = round * seed_diff
+        round_seed_interaction = round * seed_diff,
+        seed_barthag_interaction = seed_diff * barthag_diff,
+        seed_recentmov_interaction = seed_diff * recent_mov_diff
       ) %>%
       mutate(off_vs_def_adv = 0) %>%
       select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
              recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
              sos_diff, rest_diff, home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
-             off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction, round_seed_interaction)
+             off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction, round_seed_interaction,
+             seed_barthag_interaction, seed_recentmov_interaction)
 }
   games
 }
@@ -764,5 +769,10 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
         adjem_seed_interaction = (adj_em_a - adj_em_b) * seed_diff
       )
   }
+  # New seed x metric interactions (always compute from final values)
+  out <- out %>% mutate(
+    seed_barthag_interaction = seed_diff * barthag_diff,
+    seed_recentmov_interaction = seed_diff * recent_mov_diff
+  )
   out
 }
