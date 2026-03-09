@@ -24,6 +24,9 @@ CONFIG_DIR <- here("config")
 TRAIN_SEASONS_END <- 2021L  # Last season for training (test years must be > this)
 TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/- SD)
 TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
+WEIGHT_TUNE_YEARS <- c(2019L, 2020L, 2021L)  # Multiple years for weight tuning (avoids overfitting to single year)
+ENTROPY_REGULARIZATION <- 0.03  # Penalize weight concentration; higher = more uniform weights
+SKIP_ENSEMBLE_CALIBRATION <- TRUE  # Platt scaling overfits on ~120 games; skip until we have more data
 MODEL_TYPES <- c("glm", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
@@ -351,9 +354,11 @@ run_tuned <- function(train_data, matchup_data, test_years) {
 }
 
 #' Run ensemble: blend baseline + tuned model predictions, optimize weights by log loss
-#' Weights tuned on weight_tune_year (last CV fold, e.g. 2021); evaluated on test_years.
+#' Weights tuned on multiple years (WEIGHT_TUNE_YEARS) with entropy regularization to
+#' prevent collapse to a single model. Evaluated on test_years (holdout).
 #' @return List with ensemble eval and (if better) the ensemble object to save
-run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, weight_tune_year = TRAIN_SEASONS_END) {
+run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
+                        weight_tune_years = WEIGHT_TUNE_YEARS) {
   message("\n========== ENSEMBLE (blend baseline + tuned models) ==========")
 
   # Load both baseline and tuned models into pool
@@ -373,19 +378,20 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, we
     return(NULL)
   }
   message("  Pool: ", paste(names(models), collapse = ", "))
-  message("  Weight tuning on year ", weight_tune_year, " (CV fold); evaluation on ", paste(test_years, collapse = ", "))
+  message("  Weight tuning on years ", paste(weight_tune_years, collapse = ", "), " (N=", length(weight_tune_years), " years)")
+  message("  Entropy regularization: ", ENTROPY_REGULARIZATION, " (prevents single-model collapse)")
 
-  # Data for weight tuning (last CV fold, not holdout)
+  # Data for weight tuning: use multiple years to reduce variance
   weight_tune_data <- matchup_data %>%
-    filter(Season == weight_tune_year) %>%
+    filter(Season %in% weight_tune_years) %>%
     mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  if (nrow(weight_tune_data) < 10) {
-    message("  Insufficient weight-tune data for year ", weight_tune_year, ". Falling back to first test year.")
-    weight_tune_year <- test_years[1]
+  if (nrow(weight_tune_data) < 30) {
+    message("  Insufficient weight-tune data (", nrow(weight_tune_data), " games). Falling back to last train year.")
     weight_tune_data <- matchup_data %>%
-      filter(Season == weight_tune_year) %>%
+      filter(Season == TRAIN_SEASONS_END) %>%
       mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
   }
+  message("  Weight-tune games: ", nrow(weight_tune_data))
 
   # Get predictions from each model for weight tuning
   preds <- list()
@@ -397,14 +403,19 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, we
   outcome_num <- as.integer(weight_tune_data$outcome == "Win")
   eps <- 1e-15
 
-  # Optimize weights to minimize log loss on weight-tune fold (weights >= 0, sum = 1)
+  # Optimize weights: log loss + entropy regularization (prevents collapse to single model)
   n_models <- ncol(pred_df)
+  max_entropy <- log(n_models)
   obj <- function(w) {
     w <- pmax(0, w)
     w <- w / sum(w)
     prob <- as.numeric(as.matrix(pred_df) %*% matrix(w, ncol = 1))
     prob <- pmax(eps, pmin(1 - eps, prob))
-    -mean(outcome_num * log(prob) + (1 - outcome_num) * log(1 - prob))
+    log_loss <- -mean(outcome_num * log(prob) + (1 - outcome_num) * log(1 - prob))
+    # Entropy: -sum(w*log(w)); max when uniform. Penalize concentration.
+    entropy <- -sum((w + eps) * log(w + eps))
+    entropy_penalty <- max_entropy - entropy
+    log_loss + ENTROPY_REGULARIZATION * entropy_penalty
   }
   # Start from inverse log-loss weights (baseline_comp for *_baseline, tuned_comp for *_tuned)
   ll_vals <- numeric(length(models))
@@ -442,11 +453,11 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, we
   prob_win <- as.numeric(as.matrix(test_pred_df) %*% opt_weights)
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
 
-  # Fit probability calibration on weight-tune fold (2021); apply only when beneficial
+  # Fit probability calibration on weight-tune years; apply only when beneficial
   # Skip when ensemble collapses to single model (calibration overfits easily on ~63 games)
   cal_obj <- NULL
   n_active <- sum(opt_weights > 0.05)
-  if (requireNamespace("probably", quietly = TRUE) && nrow(weight_tune_data) >= 30 && n_active >= 2) {
+  if (!SKIP_ENSEMBLE_CALIBRATION && requireNamespace("probably", quietly = TRUE) && nrow(weight_tune_data) >= 30 && n_active >= 2) {
     weight_tune_prob <- as.numeric(as.matrix(pred_df) %*% opt_weights)
     weight_tune_prob <- pmax(eps, pmin(1 - eps, weight_tune_prob))
     cal_df <- weight_tune_data %>%
@@ -460,12 +471,14 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, we
       wt_ll_raw <- -mean(outcome_num * log(weight_tune_prob) + (1 - outcome_num) * log(1 - weight_tune_prob))
       wt_ll_cal <- -mean(outcome_num * log(pmax(eps, as.numeric(wt_calibrated$.pred_Win))) +
         (1 - outcome_num) * log(1 - pmin(1 - eps, as.numeric(wt_calibrated$.pred_Win))))
-      if (wt_ll_cal < wt_ll_raw * 1.02) {
+      # Only apply calibration if it improves log loss by >= 3% on tune set
+      # (avoids overfitting: Platt on ~120 games can hurt holdout badly)
+      if (wt_ll_cal < wt_ll_raw * 0.97) {
         test_cal_df <- tibble(.pred_Win = prob_win, .pred_Lose = 1 - prob_win)
         calibrated <- probably::cal_apply(test_cal_df, cal_obj)
         prob_win <- as.numeric(calibrated$.pred_Win)
         prob_win <- pmax(eps, pmin(1 - eps, prob_win))
-        message("  Applied Platt scaling (calibration fit on year ", weight_tune_year, ")")
+        message("  Applied Platt scaling (calibration fit on weight-tune years)")
       } else {
         cal_obj <- NULL
       }
@@ -506,7 +519,7 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp, we
     models = models,
     weights = opt_weights,
     model_names = names(models),
-    calibration = cal_obj  # Platt scaling fit on weight_tune_year; NULL if probably unavailable
+    calibration = cal_obj  # Platt scaling fit on weight-tune years; NULL if probably unavailable
   )
   class(ensemble_obj) <- c("ensemble_model", "list")
 
@@ -676,7 +689,7 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
     ensemble_md <- paste0(
       "\n---\n\n## Ensemble Results\n\n",
       "*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. ",
-      "Weights optimized on last CV fold (2021); probabilities calibrated when beneficial (Platt).*\n\n",
+      "Weights optimized on years 2019-2021 with entropy regularization (calibration disabled; overfits on ~120 games).*\n\n",
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",
       "| Ensemble | ", ec_acc, "% | ", ec_ll, " | ", ec$N_Games[1], " |\n\n",

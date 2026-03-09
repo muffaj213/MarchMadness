@@ -28,7 +28,7 @@
 |-------------|----------|----------|----------|
 | glm | baseline | 71.96 ± 5.10% | 0.5471 ± 0.0431 |
 | xgboost | baseline | 68.25 ± 6.92% | 0.6431 ± 0.0848 |
-| rand_forest | baseline | 73.02 ± 2.75% | 0.5478 ± 0.0322 |
+| rand_forest | baseline | 71.96 ± 3.30% | 0.5483 ± 0.0386 |
 
 ---
 
@@ -56,11 +56,11 @@
 
 ## Ensemble Results
 
-*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. Weights optimized on last CV fold (2021); probabilities calibrated when beneficial (Platt).*
+*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. Weights optimized on years 2019-2021 with entropy regularization (calibration disabled; overfits on ~120 games).*
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 68.25 ± 6.92% | 0.6431 ± 0.0848 | 189 |
+| Ensemble | 68.25 ± 6.92% | 0.6102 ± 0.0729 | 189 |
 
 ### Ensemble Weights
 
@@ -68,10 +68,10 @@
 |-------------|--------|
 | glm_baseline | 0.000 |
 | glm_tuned | 0.000 |
-| xgboost_baseline | 1.000 |
-| xgboost_tuned | 0.000 |
-| rand_forest_baseline | 0.000 |
-| rand_forest_tuned | 0.000 |
+| xgboost_baseline | 0.859 |
+| xgboost_tuned | 0.002 |
+| rand_forest_baseline | 0.113 |
+| rand_forest_tuned | 0.027 |
 
 *Weights updated 2026-03-09*
 
