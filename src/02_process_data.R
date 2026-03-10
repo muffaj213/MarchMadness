@@ -22,13 +22,6 @@ REQUIRED_FILES <- c(
 )
 REGULAR_FILE <- "MRegularSeasonCompactResults.csv"
 
-#' Choose dir for a file (raw vs raw_extended); raw_extended overrides for extended-years data
-choose_dir <- function(f) {
-  p_ext <- file.path(RAW_EXTENDED_DIR, f)
-  p_raw <- file.path(RAW_DIR, f)
-  if (file.exists(p_ext)) p_ext else p_raw
-}
-
 #' Read all raw CSVs into a list
 read_raw_data <- function() {
   dir_used <- if (dir.exists(RAW_EXTENDED_DIR)) RAW_EXTENDED_DIR else RAW_DIR

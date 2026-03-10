@@ -73,9 +73,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                             head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
                             conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                             deterministic = FALSE) {
-  # Load feature engineering (compute_matchup_features)
-  fe_path <- here::here("src", "utils", "feature_engineering.R")
-  if (file.exists(fe_path)) source(fe_path, local = TRUE)
+  # compute_matchup_features is sourced by 02_process_data or 04_predict_bracket before calling simulate_bracket
 
   # Handle column names (Kaggle/raw_historical vary: Slot,StrongSeed,WeakSeed or Season,Slot,Strongseed,Weakseed)
   slots <- as.data.frame(slots_df)

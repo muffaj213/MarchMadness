@@ -10,6 +10,8 @@ library(readr)
 library(dplyr)
 library(tidymodels)  # for predict.workflow on saved model
 
+source(here("src", "utils", "feature_engineering.R"))  # compute_matchup_features for simulate_bracket
+
 PROC_DIR <- here("data", "processed")
 MODELS_DIR <- here("models")
 OUTPUT_DIR <- here("output")
@@ -17,6 +19,11 @@ BRACKET_DIR <- here("data", "bracket")
 
 # Which season to predict (use seeds from this year)
 PREDICT_SEASON <- 2024L
+
+#' Read CSV if file exists, else NULL
+read_optional_csv <- function(path) {
+  if (file.exists(path)) read_csv(path, show_col_types = FALSE) else NULL
+}
 
 #' Load model and processed data
 #' @param seeds_file Optional path to seeds CSV (Season, Seed, TeamID). If NULL, use tourney_seeds.csv.
@@ -30,24 +37,9 @@ load_for_prediction <- function(seeds_file = NULL) {
 
   win_pct <- read_csv(file.path(PROC_DIR, "win_pct.csv"), show_col_types = FALSE)
   points_stats <- read_csv(file.path(PROC_DIR, "points_stats.csv"), show_col_types = FALSE)
-  late_win_pct_path <- file.path(PROC_DIR, "late_win_pct.csv")
-  late_win_pct <- if (file.exists(late_win_pct_path)) {
-    read_csv(late_win_pct_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  recent_win_pct_path <- file.path(PROC_DIR, "recent_win_pct.csv")
-  recent_win_pct <- if (file.exists(recent_win_pct_path)) {
-    read_csv(recent_win_pct_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  recent_mov_path <- file.path(PROC_DIR, "recent_mov.csv")
-  recent_mov <- if (file.exists(recent_mov_path)) {
-    read_csv(recent_mov_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
+  late_win_pct <- read_optional_csv(file.path(PROC_DIR, "late_win_pct.csv"))
+  recent_win_pct <- read_optional_csv(file.path(PROC_DIR, "recent_win_pct.csv"))
+  recent_mov <- read_optional_csv(file.path(PROC_DIR, "recent_mov.csv"))
   seeds <- if (is.null(seeds_file)) {
     read_csv(file.path(PROC_DIR, "tourney_seeds.csv"), show_col_types = FALSE)
   } else {
@@ -56,12 +48,7 @@ load_for_prediction <- function(seeds_file = NULL) {
   }
   slots <- read_csv(file.path(PROC_DIR, "tourney_slots.csv"), show_col_types = FALSE)
   teams <- read_csv(file.path(PROC_DIR, "teams.csv"), show_col_types = FALSE)
-  kenpom_path <- file.path(PROC_DIR, "kenpom_stats.csv")
-  kenpom_stats <- if (file.exists(kenpom_path)) {
-    read_csv(kenpom_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
+  kenpom_stats <- read_optional_csv(file.path(PROC_DIR, "kenpom_stats.csv"))
 
   # Augment KenPom for prediction seasons not in processed (e.g. 2025)
   # Processed data is built from historical seeds; future seasons need raw KenPom/Barttorvik
@@ -83,45 +70,14 @@ load_for_prediction <- function(seeds_file = NULL) {
       }
     }
   }
-  home_away_path <- file.path(PROC_DIR, "home_away_stats.csv")
-  home_away_stats <- if (file.exists(home_away_path)) {
-    read_csv(home_away_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  resume_path <- file.path(PROC_DIR, "resume_stats.csv")
-  resume_stats <- if (file.exists(resume_path)) {
-    read_csv(resume_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  head_to_head_path <- file.path(PROC_DIR, "head_to_head.csv")
-  head_to_head <- if (file.exists(head_to_head_path)) {
-    read_csv(head_to_head_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  sos_path <- file.path(PROC_DIR, "sos_stats.csv")
-  sos_stats <- if (file.exists(sos_path)) {
-    read_csv(sos_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  rest_path <- file.path(PROC_DIR, "rest_stats.csv")
-  rest_stats <- if (file.exists(rest_path)) {
-    read_csv(rest_path, show_col_types = FALSE)
-  } else {
-    NULL
-  }
-  conference_stats <- if (file.exists(file.path(PROC_DIR, "conference_stats.csv"))) {
-    read_csv(file.path(PROC_DIR, "conference_stats.csv"), show_col_types = FALSE)
-  } else { NULL }
-  quadrant_stats <- if (file.exists(file.path(PROC_DIR, "quadrant_stats.csv"))) {
-    read_csv(file.path(PROC_DIR, "quadrant_stats.csv"), show_col_types = FALSE)
-  } else { NULL }
-  first_four_stats <- if (file.exists(file.path(PROC_DIR, "first_four_stats.csv"))) {
-    read_csv(file.path(PROC_DIR, "first_four_stats.csv"), show_col_types = FALSE)
-  } else { NULL }
+  home_away_stats <- read_optional_csv(file.path(PROC_DIR, "home_away_stats.csv"))
+  resume_stats <- read_optional_csv(file.path(PROC_DIR, "resume_stats.csv"))
+  head_to_head <- read_optional_csv(file.path(PROC_DIR, "head_to_head.csv"))
+  sos_stats <- read_optional_csv(file.path(PROC_DIR, "sos_stats.csv"))
+  rest_stats <- read_optional_csv(file.path(PROC_DIR, "rest_stats.csv"))
+  conference_stats <- read_optional_csv(file.path(PROC_DIR, "conference_stats.csv"))
+  quadrant_stats <- read_optional_csv(file.path(PROC_DIR, "quadrant_stats.csv"))
+  first_four_stats <- read_optional_csv(file.path(PROC_DIR, "first_four_stats.csv"))
 
   # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
   # Uses kenpom_stats (already augmented above if prediction season was missing)
