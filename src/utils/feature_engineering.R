@@ -561,16 +561,21 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
   if (!is.null(kenpom_stats) && nrow(kenpom_stats) > 0) {
     kp_a <- kenpom_stats %>% filter(Season == season, TeamID == team_a)
     kp_b <- kenpom_stats %>% filter(Season == season, TeamID == team_b)
-    adj_em_a <- if (nrow(kp_a) > 0) kp_a$adj_em[1] else 0
-    adj_em_b <- if (nrow(kp_b) > 0) kp_b$adj_em[1] else 0
-    adj_o_a <- if (nrow(kp_a) > 0) kp_a$adj_o[1] else 100
-    adj_o_b <- if (nrow(kp_b) > 0) kp_b$adj_o[1] else 100
-    adj_d_a <- if (nrow(kp_a) > 0) kp_a$adj_d[1] else 100
-    adj_d_b <- if (nrow(kp_b) > 0) kp_b$adj_d[1] else 100
-    adj_t_a <- if (nrow(kp_a) > 0) kp_a$adj_t[1] else 68
-    adj_t_b <- if (nrow(kp_b) > 0) kp_b$adj_t[1] else 68
-    luck_a <- if (nrow(kp_a) > 0 && "luck" %in% names(kp_a)) kp_a$luck[1] else 0
-    luck_b <- if (nrow(kp_b) > 0 && "luck" %in% names(kp_b)) kp_b$luck[1] else 0
+    na0 <- function(x, default = 0) if (length(x) > 0 && !is.na(x[1])) x[1] else default
+    adj_em_a <- if (nrow(kp_a) > 0) na0(kp_a$adj_em, 0) else 0
+    adj_em_b <- if (nrow(kp_b) > 0) na0(kp_b$adj_em, 0) else 0
+    adj_o_a <- if (nrow(kp_a) > 0) na0(kp_a$adj_o, 100) else 100
+    adj_o_b <- if (nrow(kp_b) > 0) na0(kp_b$adj_o, 100) else 100
+    adj_d_a <- if (nrow(kp_a) > 0) na0(kp_a$adj_d, 100) else 100
+    adj_d_b <- if (nrow(kp_b) > 0) na0(kp_b$adj_d, 100) else 100
+    adj_t_a <- if (nrow(kp_a) > 0) na0(kp_a$adj_t, 68) else 68
+    adj_t_b <- if (nrow(kp_b) > 0) na0(kp_b$adj_t, 68) else 68
+    luck_a <- if (nrow(kp_a) > 0 && "luck" %in% names(kp_a)) {
+      x <- kp_a$luck[1]; if (!is.na(x)) x else 0
+    } else 0
+    luck_b <- if (nrow(kp_b) > 0 && "luck" %in% names(kp_b)) {
+      x <- kp_b$luck[1]; if (!is.na(x)) x else 0
+    } else 0
     off_vs_def_adv <- (adj_o_a - adj_d_b) - (adj_o_b - adj_d_a)
     out <- out %>%
       mutate(

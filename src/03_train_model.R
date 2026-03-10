@@ -616,11 +616,22 @@ main <- function() {
 
   feat_cols <- intersect(c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS), names(matchup_data))
   n_before <- nrow(matchup_data)
+  # Drop rows with invalid outcome (cannot train)
   matchup_data <- matchup_data %>%
-    filter(!is.na(outcome) & !is.infinite(outcome)) %>%
-    filter(if_all(any_of(feat_cols), ~!is.na(.) & !is.infinite(.)))
+    filter(!is.na(outcome) & !is.infinite(outcome))
+  # Impute NA/Inf in features (fix at source preferred; this is safety net for edge cases)
+  for (col in feat_cols) {
+    if (col %in% names(matchup_data)) {
+      x <- matchup_data[[col]]
+      bad <- is.na(x) | is.infinite(x)
+      if (any(bad)) {
+        matchup_data[[col]][bad] <- 0
+        message("Imputed ", sum(bad), " NA/Inf in ", col, " (safety net)")
+      }
+    }
+  }
   if (n_before != nrow(matchup_data)) {
-    message("Dropped ", n_before - nrow(matchup_data), " rows with NA/Inf.")
+    message("Dropped ", n_before - nrow(matchup_data), " rows with invalid outcome.")
   }
   if (nrow(matchup_data) < 100) stop("Insufficient training data.")
 
