@@ -62,6 +62,27 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else {
     NULL
   }
+
+  # Augment KenPom for prediction seasons not in processed (e.g. 2025)
+  # Processed data is built from historical seeds; future seasons need raw KenPom/Barttorvik
+  seeds_seasons <- unique(seeds$Season)
+  kp_seasons <- if (!is.null(kenpom_stats) && nrow(kenpom_stats) > 0) unique(kenpom_stats$Season) else integer()
+  missing_kp_seasons <- setdiff(seeds_seasons, kp_seasons)
+  if (length(missing_kp_seasons) > 0) {
+    source(here("src", "utils", "kenpom_utils.R"), local = TRUE)
+    kp_raw <- load_kenpom_stats(seeds, teams)
+    if (nrow(kp_raw) > 0) {
+      kp_augment <- kp_raw %>% filter(Season %in% missing_kp_seasons)
+      if (nrow(kp_augment) > 0) {
+        kenpom_stats <- if (is.null(kenpom_stats) || nrow(kenpom_stats) == 0) {
+          kp_augment
+        } else {
+          bind_rows(kenpom_stats, kp_augment) %>% distinct(Season, TeamID, .keep_all = TRUE)
+        }
+        message("Augmented KenPom for season(s) ", paste(missing_kp_seasons, collapse = ", "), " from raw data")
+      }
+    }
+  }
   home_away_path <- file.path(PROC_DIR, "home_away_stats.csv")
   home_away_stats <- if (file.exists(home_away_path)) {
     read_csv(home_away_path, show_col_types = FALSE)
@@ -103,26 +124,23 @@ load_for_prediction <- function(seeds_file = NULL) {
   } else { NULL }
 
   # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
+  # Uses kenpom_stats (already augmented above if prediction season was missing)
   seeds_needed <- seeds %>% distinct(Season, TeamID)
   win_pct_have <- win_pct %>% distinct(Season, TeamID)
   missing <- seeds_needed %>% anti_join(win_pct_have, by = c("Season", "TeamID"))
-  if (nrow(missing) > 0) {
-    source(here("src", "utils", "kenpom_utils.R"), local = TRUE)
-    kp <- load_kenpom_stats(seeds, teams)
-    if (nrow(kp) > 0 && "win_pct" %in% names(kp)) {
-      kp_win <- kp %>%
-        filter(!is.na(win_pct), (Season %in% missing$Season)) %>%
-        mutate(
-          Wins = if ("Wins" %in% names(.)) Wins else round(win_pct * 32),
-          Losses = if ("Losses" %in% names(.)) Losses else round((1 - win_pct) * 32),
-          Games = if ("Games" %in% names(.)) Games else pmax(1L, as.integer(Wins + Losses))
-        ) %>%
-        select(Season, TeamID, WinPct = win_pct, Wins, Losses, Games)
-      to_add <- kp_win %>% inner_join(missing, by = c("Season", "TeamID"))
-      if (nrow(to_add) > 0) {
-        win_pct <- bind_rows(win_pct, to_add)
-        message("Filled ", nrow(to_add), " win_pct rows from KenPom for missing season(s)")
-      }
+  if (nrow(missing) > 0 && !is.null(kenpom_stats) && nrow(kenpom_stats) > 0 && "win_pct" %in% names(kenpom_stats)) {
+    kp_win <- kenpom_stats %>%
+      filter(!is.na(win_pct), (Season %in% missing$Season)) %>%
+      mutate(
+        Wins = if ("Wins" %in% names(.)) Wins else round(win_pct * 32),
+        Losses = if ("Losses" %in% names(.)) Losses else round((1 - win_pct) * 32),
+        Games = if ("Games" %in% names(.)) Games else pmax(1L, as.integer(Wins + Losses))
+      ) %>%
+      select(Season, TeamID, WinPct = win_pct, Wins, Losses, Games)
+    to_add <- kp_win %>% inner_join(missing, by = c("Season", "TeamID"))
+    if (nrow(to_add) > 0) {
+      win_pct <- bind_rows(win_pct, to_add)
+      message("Filled ", nrow(to_add), " win_pct rows from KenPom for missing season(s)")
     }
   }
 

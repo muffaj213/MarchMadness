@@ -40,6 +40,20 @@ if (file.exists(file.path(here::here("data", "raw_nishaa"), "Tournament Matchups
   source(here::here("src", "01b_build_historical_from_nishaa.R"))
 }
 has_extended <- dir.exists(raw_extended_dir) && all(file.exists(paths_ext))
+
+# Step 1b2 (optional): Build regular-season data from raw_schedules when using Nishaa
+# Required for win_pct, SOS, head-to-head, etc. Place schedule CSVs in data/raw_schedules/
+schedules_dir <- here::here("data", "raw_schedules")
+schedule_files <- if (dir.exists(schedules_dir)) {
+  list.files(schedules_dir, pattern = "[0-9]{4}-[0-9]{2}_schedule\\.csv$", full.names = TRUE)
+} else character()
+if (has_extended && length(schedule_files) > 0 && file.exists(here::here("src", "01c_convert_schedules_to_regular.R"))) {
+  message("\n--- Step 1b2: Build regular season from raw_schedules ---")
+  tryCatch(
+    { source(here::here("src", "01c_convert_schedules_to_regular.R")) },
+    error = function(e) message("  01c skipped: ", conditionMessage(e))
+  )
+}
 if (!has_raw && !has_extended) {
   stop("Required data files missing. Run 00_create_sample_data.R, 01_download_data.R, or 01b (with raw_nishaa) into data/raw/ or data/raw_extended/")
 }

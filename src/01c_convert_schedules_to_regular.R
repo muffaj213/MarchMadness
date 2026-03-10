@@ -127,12 +127,20 @@ main <- function() {
       LScore = pmin(Points_For, Points_Against)
     )
 
-  # Require both teams to resolve
+  # Require both teams to resolve; assign DayNum from game order (row order = chronological best guess)
+  # DayNum 20-120 approximates regular season; enables late_win_pct (DayNum>=90), recent_*, rest
   results <- games %>%
     filter(!is.na(WTeamID), !is.na(LTeamID), WTeamID != LTeamID) %>%
-    mutate(DayNum = 1L) %>%
-    select(Season, DayNum, WTeamID, LTeamID, WScore, LScore) %>%
-    distinct()
+    mutate(game_key = paste(Season, pmin(WTeamID, LTeamID), pmax(WTeamID, LTeamID), WScore, LScore)) %>%
+    group_by(Season) %>%
+    mutate(
+      game_seq = match(game_key, unique(game_key)),
+      n_games_season = n_distinct(game_key),
+      DayNum = 20L + as.integer(100 * (game_seq - 1) / max(1, n_games_season - 1))
+    ) %>%
+    ungroup() %>%
+    distinct(Season, WTeamID, LTeamID, WScore, LScore, .keep_all = TRUE) %>%
+    select(Season, DayNum, WTeamID, LTeamID, WScore, LScore)
 
   if (nrow(results) == 0) {
     message("No games could be mapped to TeamIDs. Check name matching.")

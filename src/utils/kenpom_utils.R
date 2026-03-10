@@ -218,14 +218,18 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
     barttorvik_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
   }
   kp_bt <- load_barttorvik_kenpom(barttorvik_path, lookup)
-  # Combine: GitHub (2002-2017) + gap (2018-2023) + Barttorvik (2024+)
-  # Later sources overwrite for overlapping seasons
-  all_seasons <- unique(c(kp_gap$Season, kp_bt$Season))
+  # Combine with explicit precedence to avoid duplicate Season/TeamID:
+  # GitHub (2002-2017) | gap (2018-2023) | Barttorvik (2024+, preferred for any overlap with gap)
+  bt_seasons <- if (nrow(kp_bt) > 0) unique(kp_bt$Season) else integer()
+  gap_seasons_excluding_bt <- if (nrow(kp_gap) > 0) unique(kp_gap$Season) else integer()
+  gap_seasons_excluding_bt <- setdiff(gap_seasons_excluding_bt, bt_seasons)
+  all_other_seasons <- unique(c(bt_seasons, gap_seasons_excluding_bt))
   bind_rows(
-    kp_github %>% filter(!(Season %in% all_seasons)),
-    kp_gap,
+    kp_github %>% filter(!(Season %in% all_other_seasons)),
+    kp_gap %>% filter(Season %in% gap_seasons_excluding_bt),
     kp_bt
   ) %>%
+    distinct(Season, TeamID, .keep_all = TRUE) %>%
     arrange(Season, TeamID)
 }
 

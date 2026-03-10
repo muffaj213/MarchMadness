@@ -139,18 +139,19 @@ compute_late_win_pct <- function(regular_results, day_cutoff = 90) {
     select(Season, TeamID, LateWinPct, LateWins, LateLosses, LateGames)
 }
 
-#' Map tournament DayNum to round (1=R64, 2=R32, 3=S16, 4=E8, 5=F4, 6=Champ)
+#' Map tournament DayNum to round (0=First Four, 1=R64, 2=R32, 3=S16, 4=E8, 5=F4, 6=Champ)
 #' DayNum: 134-135 First Four, 136-139 R64, 140-143 R32, 144-147 S16, 148-151 E8, 152+ F4/Champ
+#' Matches bracket_logic.R where play-in slots get round=0 for consistency (train vs predict).
 daynum_to_round <- function(day_num) {
   d <- as.integer(day_num)
   dplyr::case_when(
-    d <= 135 ~ 1L,
-    d <= 139 ~ 1L,
-    d <= 143 ~ 2L,
-    d <= 147 ~ 3L,
-    d <= 151 ~ 4L,
-    d <= 155 ~ 5L,
-    TRUE ~ 6L
+    d <= 135 ~ 0L,   # First Four (play-in) - matches prediction round for play-in slots
+    d <= 139 ~ 1L,   # R64
+    d <= 143 ~ 2L,   # R32
+    d <= 147 ~ 3L,   # S16
+    d <= 151 ~ 4L,   # E8
+    d <= 155 ~ 5L,   # F4
+    TRUE ~ 6L        # Championship
   )
 }
 
