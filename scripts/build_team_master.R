@@ -51,7 +51,9 @@ ALIASES <- list(
   "Kent State" = "Kent St.",
   "Utah State" = "Utah St.",
   "North Dakota State" = "North Dakota St.",
-  "South Dakota State" = "South Dakota St."
+  "South Dakota State" = "South Dakota St.",
+  "McNeese" = "McNeese St.",
+  "Morehead State" = "Morehead St."
 )
 
 main <- function() {

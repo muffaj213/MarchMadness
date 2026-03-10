@@ -11,6 +11,7 @@ source(here("src", "utils", "feature_engineering.R"))
 source(here("src", "utils", "kenpom_utils.R"))
 source(here("src", "utils", "bracket_slots.R"))
 source(here("src", "utils", "merge_68team_seeds.R"))
+source(here("src", "utils", "team_id_consolidation.R"))
 
 REQUIRED_FILES <- c(
   "MTeams.csv", "MSeasons.csv", "MNCAATourneyCompactResults.csv",
@@ -84,6 +85,9 @@ main <- function() {
     message("  Merged ", n_68, " 68-team seeds from raw_historical (2011-2016)")
   }
   raw$tourney_seeds <- tourney_seeds
+
+  # Consolidate duplicate TeamIDs (e.g. McNeese 1046->1116) so each team has one record
+  raw <- build_and_apply_team_id_consolidation(raw)
 
   # Normalize column names (some Kaggle versions use different names)
   tourney_results <- raw$tourney_results
