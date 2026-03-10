@@ -11,7 +11,7 @@ library(here)
 library(readr)
 library(dplyr)
 
-PROC_DIR <- here("data", "processed")
+source(here("src", "config.R"))
 
 # Known aliases: SourceName (ESPN/KenPom) -> CanonicalName (Kaggle)
 # From kenpom_utils.R normalize_team_name substitutions

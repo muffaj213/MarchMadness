@@ -11,8 +11,7 @@ library(readxl)
 library(readr)
 library(dplyr)
 
-PROC_DIR <- here("data", "processed")
-BRACKET_DIR <- here("data", "bracket")
+source(here("src", "config.R"))
 
 # Configurable year for projected bracket
 PROJECTED_YEAR <- 2025L

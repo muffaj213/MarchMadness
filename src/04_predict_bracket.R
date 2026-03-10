@@ -10,12 +10,8 @@ library(readr)
 library(dplyr)
 library(tidymodels)  # for predict.workflow on saved model
 
+source(here("src", "config.R"))
 source(here("src", "utils", "feature_engineering.R"))  # compute_matchup_features for simulate_bracket
-
-PROC_DIR <- here("data", "processed")
-MODELS_DIR <- here("models")
-OUTPUT_DIR <- here("output")
-BRACKET_DIR <- here("data", "bracket")
 
 # Which season to predict (use seeds from this year)
 PREDICT_SEASON <- 2024L

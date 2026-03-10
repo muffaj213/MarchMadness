@@ -6,15 +6,11 @@ library(here)
 library(readr)
 library(dplyr)
 
-# Source utilities
+source(here("src", "config.R"))
 source(here("src", "utils", "feature_engineering.R"))
 source(here("src", "utils", "kenpom_utils.R"))
 source(here("src", "utils", "bracket_slots.R"))
 source(here("src", "utils", "merge_68team_seeds.R"))
-
-RAW_DIR <- here("data", "raw")
-RAW_EXTENDED_DIR <- here("data", "raw_extended")
-PROC_DIR <- here("data", "processed")
 
 REQUIRED_FILES <- c(
   "MTeams.csv", "MSeasons.csv", "MNCAATourneyCompactResults.csv",

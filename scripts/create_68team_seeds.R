@@ -16,8 +16,7 @@ library(here)
 library(readr)
 library(dplyr)
 
-PROC_DIR <- here("data", "processed")
-BRACKET_DIR <- here("data", "bracket")
+source(here("src", "config.R"))
 PLAYIN_SEEDS <- c("W16", "W11", "Y11", "Z16")  # Template structure
 PLAYIN_SPLIT <- list(
   W16 = c("W16a", "W16b"),

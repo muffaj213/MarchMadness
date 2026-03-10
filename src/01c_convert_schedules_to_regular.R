@@ -10,10 +10,10 @@ library(here)
 library(readr)
 library(dplyr)
 
-SCHEDULES_DIR <- here("data", "raw_schedules")
-TEAMS_PATH <- here("data", "raw_extended", "MTeams.csv")
-SEEDS_PATH <- here("data", "raw_extended", "MNCAATourneySeeds.csv")
-OUT_PATH <- here("data", "raw_extended", "MRegularSeasonCompactResults.csv")
+source(here("src", "config.R"))
+TEAMS_PATH <- file.path(RAW_EXTENDED_DIR, "MTeams.csv")
+SEEDS_PATH <- file.path(RAW_EXTENDED_DIR, "MNCAATourneySeeds.csv")
+OUT_PATH <- file.path(RAW_EXTENDED_DIR, "MRegularSeasonCompactResults.csv")
 
 #' Build (Season, TeamName) -> TeamID from seeds + teams (tournament teams use season-specific IDs)
 build_season_specific_mapping <- function(seeds_df, teams_df) {

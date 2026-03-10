@@ -8,6 +8,8 @@
 library(dplyr)
 library(readr)
 
+source(here::here("src", "config.R"))
+
 #' Normalize team name for matching (trim, common substitutions)
 normalize_team_name <- function(x) {
   x <- trimws(as.character(x))
@@ -181,7 +183,7 @@ load_kenpom_gap <- function(gap_path, lookup) {
 
 #' Ensure KenPom CSV exists; download from GitHub if missing
 ensure_kenpom_downloaded <- function(kenpom_dir = NULL) {
-  if (is.null(kenpom_dir)) kenpom_dir <- here::here("data", "raw_kenpom")
+  if (is.null(kenpom_dir)) kenpom_dir <- KENPOM_DIR
   kp_path <- file.path(kenpom_dir, "kenpom.csv")
   if (!file.exists(kp_path)) {
     dir.create(kenpom_dir, showWarnings = FALSE, recursive = TRUE)
@@ -199,7 +201,7 @@ ensure_kenpom_downloaded <- function(kenpom_dir = NULL) {
 #' @param projected_seeds_dir If provided, also load seeds_projected_*.csv to enable KenPom mapping for future seasons (e.g. 2025)
 load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path = NULL, projected_seeds_dir = NULL) {
   seeds_aug <- seeds
-  if (is.null(projected_seeds_dir)) projected_seeds_dir <- here::here("data", "bracket")
+  if (is.null(projected_seeds_dir)) projected_seeds_dir <- BRACKET_DIR
   proj_files <- list.files(projected_seeds_dir, pattern = "^seeds_projected_[0-9]+\\.csv$", full.names = TRUE)
   for (f in proj_files) {
     if (file.exists(f)) {
@@ -210,12 +212,12 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
     }
   }
   lookup <- build_season_team_lookup(seeds_aug, teams)
-  if (is.null(kenpom_dir)) kenpom_dir <- here::here("data", "raw_kenpom")
+  if (is.null(kenpom_dir)) kenpom_dir <- KENPOM_DIR
   ensure_kenpom_downloaded(kenpom_dir)
   kp_github <- load_github_kenpom(file.path(kenpom_dir, "kenpom.csv"), lookup)
   kp_gap <- load_kenpom_gap(file.path(kenpom_dir, "kenpom_gap_2018_2023.csv"), lookup)
   if (is.null(barttorvik_path)) {
-    barttorvik_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
+    barttorvik_path <- file.path(NISHAA_DIR, "KenPom Barttorvik.csv")
   }
   kp_bt <- load_barttorvik_kenpom(barttorvik_path, lookup)
   # Combine with explicit precedence to avoid duplicate Season/TeamID:
@@ -237,7 +239,7 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
 #' Expected columns: Year, Team, Home win rate, Away win rate
 #' @return Tibble with Season, TeamID, home_win_rate, away_win_rate
 load_home_away_win_rates <- function(path = NULL, lookup) {
-  if (is.null(path)) path <- here::here("data", "raw_atoziye", "College basketball 2012-24.csv")
+  if (is.null(path)) path <- file.path(RAW_ATOZIYE_DIR, "College basketball 2012-24.csv")
   if (!file.exists(path)) return(tibble())
   df <- read_csv(path, show_col_types = FALSE)
   if (nrow(df) == 0) return(tibble())
@@ -263,8 +265,8 @@ load_home_away_win_rates <- function(path = NULL, lookup) {
 #' Resumes: YEAR, TEAM, ELO, WAB RANK. Teamsheet: YEAR, TEAM, NET, WAB
 #' @return Tibble with Season, TeamID, elo, net, wab
 load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup) {
-  if (is.null(resumes_path)) resumes_path <- here::here("data", "raw_nishaa", "Resumes.csv")
-  if (is.null(teamsheet_path)) teamsheet_path <- here::here("data", "raw_nishaa", "Teamsheet Ranks.csv")
+  if (is.null(resumes_path)) resumes_path <- file.path(NISHAA_DIR, "Resumes.csv")
+  if (is.null(teamsheet_path)) teamsheet_path <- file.path(NISHAA_DIR, "Teamsheet Ranks.csv")
   out <- tibble(Season = integer(), TeamID = integer(), elo = numeric(), net = numeric(), wab = numeric())
   if (file.exists(resumes_path)) {
     r <- read_csv(resumes_path, show_col_types = FALSE)
@@ -326,7 +328,7 @@ load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup
 #' Uses KenPom Conference and raw_nishaa Conference Stats.csv
 #' @return Tibble Season, TeamID, conf_em (conference strength, higher = stronger conf)
 load_conference_strength <- function(lookup, conf_stats_path = NULL) {
-  if (is.null(conf_stats_path)) conf_stats_path <- here::here("data", "raw_nishaa", "Conference Stats.csv")
+  if (is.null(conf_stats_path)) conf_stats_path <- file.path(NISHAA_DIR, "Conference Stats.csv")
   if (!file.exists(conf_stats_path)) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
   conf <- read_csv(conf_stats_path, show_col_types = FALSE)
   if (nrow(conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
@@ -339,14 +341,14 @@ load_conference_strength <- function(lookup, conf_stats_path = NULL) {
     filter(!is.na(conf_em))
   # Team -> Conference from KenPom (github) and Barttorvik
   team_conf <- tibble(Season = integer(), TeamID = integer(), Conference = character())
-  kp_path <- here::here("data", "raw_kenpom", "kenpom.csv")
+  kp_path <- file.path(KENPOM_DIR, "kenpom.csv")
   if (file.exists(kp_path) && "Conference" %in% names(read_csv(kp_path, n_max = 1, show_col_types = FALSE))) {
     kp <- read_csv(kp_path, show_col_types = FALSE) %>% rename(Season = Year)
     kp$TeamID <- map_kenpom_to_teamids(kp, lookup)
     team_conf <- kp %>% filter(!is.na(TeamID)) %>%
       select(Season, TeamID, Conference) %>% distinct(Season, TeamID, .keep_all = TRUE)
   }
-  bt_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
+  bt_path <- file.path(NISHAA_DIR, "KenPom Barttorvik.csv")
   if (file.exists(bt_path) && "CONF" %in% names(read_csv(bt_path, n_max = 1, show_col_types = FALSE))) {
     bt <- read_csv(bt_path, show_col_types = FALSE) %>%
       rename(Season = YEAR, Team = TEAM, Conference = CONF)
@@ -368,7 +370,7 @@ load_conference_strength <- function(lookup, conf_stats_path = NULL) {
 #' Load quadrant win rates (Q1, Q1+Q2) from Teamsheet Ranks
 #' @return Tibble Season, TeamID, quad1_winpct, quad12_winpct
 load_quadrant_stats <- function(lookup, path = NULL) {
-  if (is.null(path)) path <- here::here("data", "raw_nishaa", "Teamsheet Ranks.csv")
+  if (is.null(path)) path <- file.path(NISHAA_DIR, "Teamsheet Ranks.csv")
   if (!file.exists(path)) return(tibble(Season = integer(), TeamID = integer(), quad1_winpct = numeric(), quad12_winpct = numeric()))
   ts <- read_csv(path, show_col_types = FALSE)
   if (nrow(ts) == 0) return(tibble(Season = integer(), TeamID = integer(), quad1_winpct = numeric(), quad12_winpct = numeric()))
@@ -401,7 +403,7 @@ load_quadrant_stats <- function(lookup, path = NULL) {
 #' Load BARTHAG and ELITE SOS from Barttorvik CSV (optional resume metrics)
 #' @return Tibble with Season, TeamID, barthag, elite_sos (or empty)
 load_barttorvik_resume_metrics <- function(bt_path = NULL, lookup) {
-  if (is.null(bt_path)) bt_path <- here::here("data", "raw_nishaa", "KenPom Barttorvik.csv")
+  if (is.null(bt_path)) bt_path <- file.path(NISHAA_DIR, "KenPom Barttorvik.csv")
   if (!file.exists(bt_path)) return(tibble())
   bt <- read_csv(bt_path, show_col_types = FALSE)
   if (nrow(bt) == 0) return(tibble())

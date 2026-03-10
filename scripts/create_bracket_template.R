@@ -7,7 +7,7 @@
 library(writexl)
 library(here)
 
-BRACKET_DIR <- here("data", "bracket")
+source(here("src", "config.R"))
 dir.create(BRACKET_DIR, showWarnings = FALSE, recursive = TRUE)
 
 # Seeds: W01-W16, X01-X16, Y01-Y16, Z01-Z16 (64 rows)

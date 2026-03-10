@@ -9,7 +9,7 @@ library(here)
 library(readr)
 library(dplyr)
 
-RAW_DIR <- here("data", "raw")
+source(here("src", "config.R"))
 if (!dir.exists(RAW_DIR)) dir.create(RAW_DIR, recursive = TRUE)
 
 # Minimal teams (64 teams x 5 years = 320 teams)

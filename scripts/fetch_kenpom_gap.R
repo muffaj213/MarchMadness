@@ -14,7 +14,8 @@ if (!requireNamespace("toRvik", quietly = TRUE)) {
   stop("Install toRvik: devtools::install_github('andreweatherman/toRvik')")
 }
 
-OUT_DIR <- here("data", "raw_kenpom")
+source(here("src", "config.R"))
+OUT_DIR <- KENPOM_DIR
 GAP_YEARS <- 2018:2023
 
 main <- function() {

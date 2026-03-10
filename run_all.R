@@ -7,24 +7,26 @@
 # Or from command line:
 #   Rscript run_all.R
 #
-# Steps: 1) Download data, 2) Process, 3) Train, 4) Predict
+# Skip prediction: RUN_PREDICTION=FALSE Rscript run_all.R
+#
+# Steps: 1) Download data, 2) Process, 3) Train, 4) Predict (optional)
 # =============================================================================
 
 library(here)
 
+source(here("src", "config.R"))
+
 message("========== NCAA Bracket Prediction Pipeline ==========")
 
 # Step 0 (optional): Create sample data if no Kaggle data exists
-raw_dir <- here::here("data", "raw")
-raw_extended_dir <- here::here("data", "raw_extended")
 required <- c("MTeams.csv", "MNCAATourneyCompactResults.csv", "MNCAATourneySeeds.csv",
               "MNCAATourneySlots.csv")
 required_opt <- "MRegularSeasonCompactResults.csv"  # optional; seed-only when missing
 
-paths_raw <- file.path(raw_dir, c(required, required_opt))
-paths_ext <- file.path(raw_extended_dir, required)
+paths_raw <- file.path(RAW_DIR, c(required, required_opt))
+paths_ext <- file.path(RAW_EXTENDED_DIR, required)
 has_raw <- all(file.exists(paths_raw[1:length(required)]))
-has_extended <- dir.exists(raw_extended_dir) && all(file.exists(paths_ext))
+has_extended <- dir.exists(RAW_EXTENDED_DIR) && all(file.exists(paths_ext))
 
 if (!has_raw && !has_extended) {
   message("\n--- Step 0: Creating sample data (no Kaggle data found) ---")
@@ -35,17 +37,16 @@ if (!has_raw && !has_extended) {
   source(here::here("src", "01_download_data.R"))
 }
 # Step 1b (optional): Build extended historical data from nishaanamin
-if (file.exists(file.path(here::here("data", "raw_nishaa"), "Tournament Matchups.csv")) && !has_extended) {
+if (file.exists(file.path(NISHAA_DIR, "Tournament Matchups.csv")) && !has_extended) {
   message("\n--- Step 1b: Build historical data from Tournament Matchups ---")
   source(here::here("src", "01b_build_historical_from_nishaa.R"))
 }
-has_extended <- dir.exists(raw_extended_dir) && all(file.exists(paths_ext))
+has_extended <- dir.exists(RAW_EXTENDED_DIR) && all(file.exists(paths_ext))
 
 # Step 1b2 (optional): Build regular-season data from raw_schedules when using Nishaa
 # Required for win_pct, SOS, head-to-head, etc. Place schedule CSVs in data/raw_schedules/
-schedules_dir <- here::here("data", "raw_schedules")
-schedule_files <- if (dir.exists(schedules_dir)) {
-  list.files(schedules_dir, pattern = "[0-9]{4}-[0-9]{2}_schedule\\.csv$", full.names = TRUE)
+schedule_files <- if (dir.exists(SCHEDULES_DIR)) {
+  list.files(SCHEDULES_DIR, pattern = "[0-9]{4}-[0-9]{2}_schedule\\.csv$", full.names = TRUE)
 } else character()
 if (has_extended && length(schedule_files) > 0 && file.exists(here::here("src", "01c_convert_schedules_to_regular.R"))) {
   message("\n--- Step 1b2: Build regular season from raw_schedules ---")
@@ -75,8 +76,13 @@ source(here::here("src", "02_process_data.R"))
 message("\n--- Step 3: Train model ---")
 source(here::here("src", "03_train_model.R"))
 
-# Step 4: Predict bracket
-message("\n--- Step 4: Predict bracket ---")
-source(here::here("src", "04_predict_bracket.R"))
+# Step 4: Predict bracket (optional; set RUN_PREDICTION=FALSE to skip)
+RUN_PREDICTION <- as.logical(Sys.getenv("RUN_PREDICTION", "TRUE"))
+if (RUN_PREDICTION) {
+  message("\n--- Step 4: Predict bracket ---")
+  source(here::here("src", "04_predict_bracket.R"))
+} else {
+  message("\n--- Step 4: Skipped (RUN_PREDICTION=FALSE) ---")
+}
 
 message("\n========== Pipeline complete ==========")

@@ -10,9 +10,8 @@ library(here)
 library(readr)
 library(dplyr)
 
-NISHAA_DIR <- here("data", "raw_nishaa")
-RAW_DIR <- here("data", "raw")
-OUT_DIR <- here("data", "raw_extended")
+source(here("src", "config.R"))
+OUT_DIR <- RAW_EXTENDED_DIR
 
 #' Parse Tournament Matchups into game results
 #' Format: YEAR, BY YEAR NO, TEAM NO, TEAM, SEED, ROUND, CURRENT ROUND, SCORE

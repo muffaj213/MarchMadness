@@ -11,9 +11,7 @@ library(readr)
 library(dplyr)
 library(tidymodels)
 
-PROC_DIR <- here("data", "processed")
-MODELS_DIR <- here("models")
-OUTPUT_DIR <- here("output")
+source(here("src", "config.R"))
 CONFIG_DIR <- here("config")
 
 # Model configuration

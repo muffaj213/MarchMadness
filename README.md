@@ -8,6 +8,7 @@ NCAA Men's Basketball Tournament bracket prediction model in R.
 2. Download data from [Kaggle NCAA Basketball](https://www.kaggle.com/datasets/ncaa/ncaa-basketball) into `data/raw/`
 3. KenPom data is auto-downloaded to `data/raw_kenpom/` on first run (or place `kenpom.csv` there manually)
 4. Run full pipeline: `source("run_all.R")`
+5. Skip prediction (process + train only): `RUN_PREDICTION=FALSE Rscript run_all.R`
 
 ## Pipeline
 

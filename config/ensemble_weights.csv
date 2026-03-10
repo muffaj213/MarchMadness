@@ -1,9 +1,9 @@
 Model,Weight
-glm_baseline,0
-glm_tuned,0
-glmnet_baseline,0
-glmnet_tuned,0
-xgboost_baseline,0.8830719972577146
-xgboost_tuned,0
-rand_forest_baseline,0.09410270252535737
-rand_forest_tuned,0.022825300216928038
+glm_baseline,0.26786912889210296
+glm_tuned,0.0268719193101119
+glmnet_baseline,0.10987638170111147
+glmnet_tuned,0.12177941317915902
+xgboost_baseline,0.13317755642582316
+xgboost_tuned,0.15864265126627883
+rand_forest_baseline,0.08819298671934604
+rand_forest_tuned,0.09358996250606667

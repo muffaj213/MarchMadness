@@ -10,7 +10,8 @@ library(here)
 library(readr)
 library(dplyr)
 
-RAW_HIST_DIR <- here("data", "raw_historical")
+source(here("src", "config.R"))
+
 FIRST_FOUR_YEAR <- 2011L
 
 # Fallback when first arg is empty/NA

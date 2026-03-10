@@ -16,8 +16,7 @@
 
 library(here)
 
-# Configuration
-RAW_DIR <- here("data", "raw")
+source(here("src", "config.R"))
 REQUIRED_FILES <- c(
   "MTeams.csv",
   "MSeasons.csv",

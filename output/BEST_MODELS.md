@@ -1,6 +1,6 @@
 # March Madness Model Performance
 
-*Updated 2026-03-09*
+*Updated 2026-03-10*
 
 **Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (189 games total). Metrics show mean ± SD across holdout years when multiple.
 
@@ -26,10 +26,10 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 70.90 ± 4.58% | 0.5496 ± 0.0415 |
-| glmnet | baseline | 71.43 ± 1.59% | 0.5534 ± 0.0187 |
-| xgboost | baseline | 66.67 ± 6.92% | 0.6661 ± 0.0918 |
-| rand_forest | baseline | 73.02 ± 5.72% | 0.5554 ± 0.0439 |
+| glm | baseline | 97.35 ± 3.30% | 0.4456 ± 0.4599 |
+| glmnet | baseline | 98.41 ± 2.75% | 0.0516 ± 0.0354 |
+| xgboost | baseline | 98.41 ± 1.59% | 0.0587 ± 0.0316 |
+| rand_forest | baseline | 98.41 ± 2.75% | 0.1144 ± 0.0302 |
 
 ---
 
@@ -39,10 +39,10 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 68.78 ± 1.83% | 0.5853 ± 0.0195 |
-| glmnet | tuned | 70.37 ± 2.42% | 0.5559 ± 0.0097 |
-| xgboost | tuned | 72.49 ± 6.01% | 0.5567 ± 0.0356 |
-| rand_forest | tuned | 71.96 ± 5.10% | 0.5511 ± 0.0316 |
+| glm | tuned | 97.35 ± 2.42% | 0.1125 ± 0.0324 |
+| glmnet | tuned | 98.41 ± 2.75% | 0.0486 ± 0.0357 |
+| xgboost | tuned | 97.88 ± 1.83% | 0.0485 ± 0.0339 |
+| rand_forest | tuned | 98.41 ± 2.75% | 0.1195 ± 0.0275 |
 
 ---
 
@@ -52,7 +52,7 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| glm | baseline | 70.90 ± 4.58% | 0.5496 ± 0.0415 |
+| Best (log loss)| xgboost | tuned | 97.88 ± 1.83% | 0.0485 ± 0.0339 |
 
 ---
 
@@ -62,20 +62,20 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 66.67 ± 6.92% | 0.6304 ± 0.0834 | 189 |
+| Ensemble | 98.41 ± 1.59% | 0.0612 ± 0.0296 | 189 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
 |-------------|--------|
-| glm_baseline | 0.000 |
-| glm_tuned | 0.000 |
-| glmnet_baseline | 0.000 |
-| glmnet_tuned | 0.000 |
-| xgboost_baseline | 0.883 |
-| xgboost_tuned | 0.000 |
-| rand_forest_baseline | 0.094 |
-| rand_forest_tuned | 0.023 |
+| glm_baseline | 0.268 |
+| glm_tuned | 0.027 |
+| glmnet_baseline | 0.110 |
+| glmnet_tuned | 0.122 |
+| xgboost_baseline | 0.133 |
+| xgboost_tuned | 0.159 |
+| rand_forest_baseline | 0.088 |
+| rand_forest_tuned | 0.094 |
 
-*Weights updated 2026-03-09*
+*Weights updated 2026-03-10*
 

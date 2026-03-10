@@ -8,7 +8,7 @@ library(here)
 library(readr)
 library(dplyr)
 
-TEAM_ID_MASTER_PATH <- here("data", "processed", "team_id_master.csv")
+source(here("src", "config.R"))
 
 #' Load team ID master (canonical <-> Kaggle)
 load_team_id_master <- function(path = TEAM_ID_MASTER_PATH) {

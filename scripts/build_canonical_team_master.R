@@ -12,9 +12,7 @@ library(here)
 library(readr)
 library(dplyr)
 
-RAW_HIST_DIR <- here("data", "raw_historical")
-PROC_DIR <- here("data", "processed")
-OUTPUT_DIR <- here("output")
+source(here("src", "config.R"))
 
 #' Normalize team name for matching (collapsed, comparable form)
 normalize_for_match <- function(x) {
@@ -398,10 +396,10 @@ main <- function() {
     )
 
   # Load Kaggle MTeams (prefer raw_extended)
-  kaggle_path <- if (file.exists(file.path(here("data", "raw_extended"), "MTeams.csv"))) {
-    file.path(here("data", "raw_extended"), "MTeams.csv")
+  kaggle_path <- if (file.exists(file.path(RAW_EXTENDED_DIR, "MTeams.csv"))) {
+    file.path(RAW_EXTENDED_DIR, "MTeams.csv")
   } else {
-    file.path(here("data", "raw"), "MTeams.csv")
+    file.path(RAW_DIR, "MTeams.csv")
   }
   if (!file.exists(kaggle_path)) {
     stop("Kaggle MTeams not found. Run 01_download_data.R first.")

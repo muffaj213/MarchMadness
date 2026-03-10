@@ -11,8 +11,8 @@ library(here)
 library(readr)
 library(dplyr)
 
-RAW_HIST_DIR <- here("data", "raw_historical")
-PROC_DIR <- here("data", "processed")
+source(here("src", "config.R"))
+
 FIRST_FOUR_YEAR <- 2011L
 LAST_RAW_HIST_68 <- 2016L  # raw_historical has 68-team data through 2016
 
@@ -21,7 +21,7 @@ LAST_RAW_HIST_68 <- 2016L  # raw_historical has 68-team data through 2016
 #' @param base_seeds tourney_seeds from Kaggle (Season, Seed, TeamID)
 #' @return Merged seeds
 merge_68team_seeds_if_available <- function(base_seeds) {
-  master_path <- file.path(PROC_DIR, "team_id_master.csv")
+  master_path <- TEAM_ID_MASTER_PATH
   hist_seeds_path <- file.path(RAW_HIST_DIR, "TourneySeeds.csv")
   if (!file.exists(master_path) || !file.exists(hist_seeds_path)) {
     return(base_seeds)
