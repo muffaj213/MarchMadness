@@ -127,6 +127,7 @@ main <- function() {
   message("Historical tournament data built. Seasons: ", min(seeds$Season), "-", max(seeds$Season))
   message("Output: ", OUT_DIR)
   message("To use: copy/copy these files to data/raw/ or update 02_process_data to read from raw_extended")
+  message("Note: run scripts/fix_seeds_from_danvk.R to correct region (W/X/Y/Z) assignments using danvk bracket data")
 }
 
 main()

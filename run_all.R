@@ -38,6 +38,14 @@ if (file.exists(file.path(NISHAA_DIR, "Tournament Matchups.csv")) && !has_extend
   message("\n--- Step 1c: Build historical data from Tournament Matchups ---")
   source(here("src", "01b_build_historical_from_nishaa.R"))
 }
+# Step 1c2: Fix seed region assignment using danvk/march-madness-data (correct W/X/Y/Z)
+if (dir.exists(RAW_EXTENDED_DIR) && file.exists(here("scripts", "fix_seeds_from_danvk.R"))) {
+  message("\n--- Step 1c2: Fix seed regions from danvk bracket data ---")
+  tryCatch(
+    { source(here("scripts", "fix_seeds_from_danvk.R")) },
+    error = function(e) message("  fix_seeds skipped: ", conditionMessage(e))
+  )
+}
 has_extended <- dir.exists(RAW_EXTENDED_DIR) && all(file.exists(paths_ext))
 
 schedule_files <- if (dir.exists(SCHEDULES_DIR)) {
