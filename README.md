@@ -23,7 +23,7 @@ The tournament expanded from 64 to 68 teams in **2011**. The simulation supports
 
 - **Slots**: For 2011+, 4 First Four slots (e.g. W16a vs W16b) are prepended before R1. Uses `data/raw_historical/TourneySlots.csv` when available (2011–2016); otherwise a standard template (W16, W11, Y11, Z16).
 - **Seeds**: With **68-team seeds**, First Four games are simulated and appear in `game_results` with `round=0` for bracket pool points.
-- **2011–2016**: Run `Rscript scripts/build_canonical_team_master.R` first, then `02_process_data.R`. When `team_id_master.csv` exists, 68-team seeds from `raw_historical` are merged (with hybrid fallback for unmapped teams).
+- **2011–2016**: Place `data/raw_historical/Teams.csv` and `TourneySeeds.csv` in the repo. The pipeline auto-builds `team_id_master.csv` (Step 1f) when missing, enabling 68-team seed merge. Or run `Rscript scripts/build_canonical_team_master.R` manually first.
 - **2025+**: Run `Rscript scripts/create_68team_seeds.R 2025` after Selection Sunday, edit the CSV to fill play-in TeamIDs, then:
   ```r
   source("src/04_predict_bracket.R")
