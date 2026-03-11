@@ -1,6 +1,6 @@
 # March Madness Model Performance
 
-*Updated 2026-03-10*
+*Updated 2026-03-11*
 
 **Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (187 games total). Metrics show mean ± SD across holdout years when multiple.
 
@@ -29,7 +29,7 @@
 | glm | baseline | 94.65 ± 5.08% | 1.0878 ± 1.0392 |
 | glmnet | baseline | 98.40 ± 2.75% | 0.0494 ± 0.0357 |
 | xgboost | baseline | 98.40 ± 1.64% | 0.0647 ± 0.0338 |
-| rand_forest | baseline | 98.40 ± 2.75% | 0.1281 ± 0.0259 |
+| rand_forest | baseline | 98.40 ± 2.75% | 0.1291 ± 0.0293 |
 
 ---
 
@@ -62,20 +62,20 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 98.40 ± 1.59% | 0.0683 ± 0.0411 | 187 |
+| Ensemble | 98.40 ± 1.59% | 0.0682 ± 0.0416 | 187 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
 |-------------|--------|
-| glm_baseline | 0.270 |
+| glm_baseline | 0.272 |
 | glm_tuned | 0.026 |
-| glmnet_baseline | 0.110 |
-| glmnet_tuned | 0.122 |
+| glmnet_baseline | 0.111 |
+| glmnet_tuned | 0.123 |
 | xgboost_baseline | 0.135 |
 | xgboost_tuned | 0.160 |
-| rand_forest_baseline | 0.075 |
+| rand_forest_baseline | 0.070 |
 | rand_forest_tuned | 0.102 |
 
-*Weights updated 2026-03-10*
+*Weights updated 2026-03-11*
 

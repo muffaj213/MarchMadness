@@ -21,6 +21,57 @@ read_optional_csv <- function(path) {
   if (file.exists(path)) read_csv(path, show_col_types = FALSE) else NULL
 }
 
+#' Build audit of which features used defaults (missing data) per game
+#' @return Tibble with slot, round, team_a, team_b, team_a_missing, team_b_missing, prob_a
+build_prediction_defaults_audit <- function(game_results, season,
+                                            win_pct, points_stats, kenpom_stats,
+                                            late_win_pct, recent_win_pct, recent_mov,
+                                            sos_stats, rest_stats, conference_stats,
+                                            quadrant_stats, resume_stats, home_away_stats,
+                                            first_four_stats) {
+  has_data <- function(df, sid, tid) {
+    if (is.null(df) || nrow(df) == 0) return(FALSE)
+    if (!"TeamID" %in% names(df)) return(FALSE)
+    nrow(df %>% filter(Season == sid, TeamID == tid)) > 0
+  }
+  game_results %>%
+    rowwise() %>%
+    mutate(
+      team_a_missing = paste(c(
+        if (!has_data(win_pct, season, team_a)) "win_pct",
+        if (!has_data(points_stats, season, team_a)) "points_stats",
+        if (!has_data(kenpom_stats, season, team_a)) "kenpom",
+        if (!has_data(late_win_pct, season, team_a)) "late_win_pct",
+        if (!has_data(recent_win_pct, season, team_a)) "recent_win_pct",
+        if (!has_data(recent_mov, season, team_a)) "recent_mov",
+        if (!has_data(sos_stats, season, team_a)) "sos",
+        if (!has_data(rest_stats, season, team_a)) "rest",
+        if (!has_data(conference_stats, season, team_a)) "conference",
+        if (!has_data(quadrant_stats, season, team_a)) "quadrant",
+        if (!has_data(resume_stats, season, team_a)) "resume",
+        if (!has_data(home_away_stats, season, team_a)) "home_away",
+        if (!has_data(first_four_stats, season, team_a)) "first_four"
+      ), collapse = ","),
+      team_b_missing = paste(c(
+        if (!has_data(win_pct, season, team_b)) "win_pct",
+        if (!has_data(points_stats, season, team_b)) "points_stats",
+        if (!has_data(kenpom_stats, season, team_b)) "kenpom",
+        if (!has_data(late_win_pct, season, team_b)) "late_win_pct",
+        if (!has_data(recent_win_pct, season, team_b)) "recent_win_pct",
+        if (!has_data(recent_mov, season, team_b)) "recent_mov",
+        if (!has_data(sos_stats, season, team_b)) "sos",
+        if (!has_data(rest_stats, season, team_b)) "rest",
+        if (!has_data(conference_stats, season, team_b)) "conference",
+        if (!has_data(quadrant_stats, season, team_b)) "quadrant",
+        if (!has_data(resume_stats, season, team_b)) "resume",
+        if (!has_data(home_away_stats, season, team_b)) "home_away",
+        if (!has_data(first_four_stats, season, team_b)) "first_four"
+      ), collapse = ",")
+    ) %>%
+    ungroup() %>%
+    select(slot, round, team_a, team_b, team_a_missing, team_b_missing, prob_a)
+}
+
 #' Load model and processed data
 #' @param seeds_file Optional path to seeds CSV (Season, Seed, TeamID). If NULL, use tourney_seeds.csv.
 load_for_prediction <- function(seeds_file = NULL) {
@@ -187,6 +238,34 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
   champ_name <- lookup[as.character(result$champion)]
 
   message("Predicted champion: ", champ_name, " (TeamID ", result$champion, ")")
+
+  # Audit: which teams used default values (missing data) per game
+  defaults_audit <- build_prediction_defaults_audit(
+    game_results = result$game_results,
+    season = season,
+    win_pct = data$win_pct,
+    points_stats = data$points_stats,
+    kenpom_stats = data$kenpom_stats,
+    late_win_pct = data$late_win_pct,
+    recent_win_pct = data$recent_win_pct,
+    recent_mov = data$recent_mov,
+    sos_stats = data$sos_stats,
+    rest_stats = data$rest_stats,
+    conference_stats = data$conference_stats,
+    quadrant_stats = data$quadrant_stats,
+    resume_stats = data$resume_stats,
+    home_away_stats = data$home_away_stats,
+    first_four_stats = data$first_four_stats
+  )
+  defaults_audit <- defaults_audit %>%
+    mutate(
+      team_a_name = lookup[as.character(team_a)],
+      team_b_name = lookup[as.character(team_b)]
+    )
+  defaults_base <- if (use_projected_output) paste0("prediction_defaults_projected_", season) else paste0("prediction_defaults_", season)
+  defaults_file <- file.path(OUTPUT_DIR, paste0(defaults_base, ".csv"))
+  write_csv(defaults_audit, defaults_file)
+  message("Prediction defaults audit saved to ", defaults_file)
 
   # Save outputs
   out_base <- if (use_projected_output) paste0("bracket_prediction_projected_", season) else paste0("bracket_prediction_", season)

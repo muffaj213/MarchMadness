@@ -45,8 +45,8 @@ main <- function() {
 
   teams <- read_csv(file.path(PROC_DIR, "teams.csv"), show_col_types = FALSE)
 
-  message("Resolving team names to TeamIDs...")
-  manual$TeamID <- resolve_team_names_to_ids(manual$Team, teams)
+  message("Resolving team names to TeamIDs (season-aware for 2024)...")
+  manual$TeamID <- resolve_team_names_to_ids(manual$Team, teams, season = 2024L)
   missing <- manual %>% filter(is.na(TeamID), trimws(as.character(Team)) != "")
   if (nrow(missing) > 0) {
     stop("Could not resolve team(s): ", paste(missing$Team, collapse = ", "),

@@ -250,6 +250,17 @@ main <- function() {
     message("  68-team slots (First Four) for ", n_68, " seasons (2011+)")
   }
 
+  # Build team_season_ids: (Season, CanonicalName) -> KaggleTeamID for season-aware resolution
+  team_col <- intersect(names(raw$teams), c("TeamName", "Team_Name", "Name"))[1]
+  if (is.na(team_col)) team_col <- names(raw$teams)[2]
+  team_season_ids <- raw$tourney_seeds %>%
+    left_join(raw$teams %>% select(TeamID, CanonicalName = !!sym(team_col)), by = "TeamID") %>%
+    filter(!is.na(CanonicalName)) %>%
+    distinct(Season, CanonicalName, .keep_all = TRUE) %>%
+    select(Season, CanonicalName, KaggleTeamID = TeamID)
+  write_csv(team_season_ids, file.path(PROC_DIR, "team_season_ids.csv"))
+  message("  team_season_ids: ", nrow(team_season_ids), " season-team mappings")
+
   # Build team name master table for ESPN/KenPom -> TeamID resolution
   if (file.exists(here("scripts", "build_team_master.R"))) {
     tryCatch(
