@@ -105,7 +105,7 @@ source(here("src", "03_train_model.R"))
 # Runs predictions for 2022, 2023, 2024 so you can review model performance on
 # holdout years whenever the model is updated.
 RUN_PREDICTION <- as.logical(Sys.getenv("RUN_PREDICTION", "TRUE"))
-PREDICT_SEASONS <- c(2022L, 2023L, 2024L)
+PREDICT_SEASONS <- c(2022L, 2023L, 2024L, 2025L)
 if (RUN_PREDICTION) {
   message("\n--- Step 4: Predict bracket ---")
   options(bracket.skip_main = TRUE)
@@ -114,6 +114,8 @@ if (RUN_PREDICTION) {
   for (yr in PREDICT_SEASONS) {
     seeds_file <- if (yr == 2024L && file.exists(file.path(BRACKET_DIR, "seeds_manual_2024.csv"))) {
       file.path(BRACKET_DIR, "seeds_manual_2024.csv")
+    } else if (yr == 2025L && file.exists(file.path(BRACKET_DIR, "seeds_68team_2025.csv"))) {
+      file.path(BRACKET_DIR, "seeds_68team_2025.csv")
     } else {
       NULL
     }
@@ -125,7 +127,7 @@ if (RUN_PREDICTION) {
       error = function(e) message("  ", yr, ": ", conditionMessage(e))
     )
   }
-  message("  Bracket predictions saved to output/bracket_prediction_{2022,2023,2024}.csv")
+  message("  Bracket predictions saved to output/bracket_prediction_{2022,2023,2024,2025}.csv")
 } else {
   message("\n--- Step 4: Skipped (RUN_PREDICTION=FALSE) ---")
 }
