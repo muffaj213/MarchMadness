@@ -3,12 +3,26 @@
 # =============================================================================
 # Uses data/raw_kenpom/kenpom.csv (2002-2017 from GitHub) and optionally
 # data/raw_nishaa/KenPom Barttorvik.csv for 2024-2025.
+# Maps all sources to canonical names via team_aliases.csv before lookup.
 # =============================================================================
 
 library(dplyr)
 library(readr)
 
 source(here::here("src", "config.R"))
+
+#' Resolve name to canonical via team_aliases (same logic as bracket_utils)
+resolve_to_canonical <- function(nm) {
+  nm <- trimws(as.character(nm))
+  if (is.na(nm) || nm == "") return(nm)
+  alias_path <- here::here("data", "processed", "team_aliases.csv")
+  if (file.exists(alias_path)) {
+    aliases <- readr::read_csv(alias_path, show_col_types = FALSE)
+    idx <- which(tolower(trimws(aliases$Alias)) == tolower(nm))
+    if (length(idx) >= 1) return(trimws(aliases$CanonicalName[idx[1]]))
+  }
+  nm
+}
 
 #' Normalize team name for matching (trim, common substitutions)
 normalize_team_name <- function(x) {
@@ -72,13 +86,23 @@ build_season_team_lookup <- function(seeds, teams) {
 }
 
 #' Map KenPom (Season, Team) to TeamID via lookup (vectorized)
+#' Applies team_aliases (canonical) before normalize for consistent matching
 map_kenpom_to_teamids <- function(kp_df, lookup) {
   lookup_norm <- lookup %>%
     mutate(TeamNameNorm = normalize_team_name(TeamName)) %>%
     distinct(Season, TeamNameNorm, .keep_all = TRUE) %>%
     select(Season, TeamID, TeamNameNorm)
+  team_names <- unique(trimws(as.character(kp_df$Team)))
+  canon_lookup <- setNames(
+    vapply(team_names, function(x) resolve_to_canonical(x), FUN.VALUE = character(1)),
+    team_names
+  )
   kp_norm <- kp_df %>%
-    mutate(TeamNorm = normalize_team_name(Team), .row = row_number())
+    mutate(
+      TeamCanon = canon_lookup[trimws(as.character(Team))],
+      TeamNorm = normalize_team_name(TeamCanon),
+      .row = row_number()
+    )
   # Join on exact match (one-to-one)
   matched <- kp_norm %>%
     left_join(
