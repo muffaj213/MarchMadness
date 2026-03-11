@@ -11,6 +11,7 @@ library(readr)
 library(dplyr)
 
 source(here("src", "config.R"))
+source(here("src", "utils", "bracket_slots.R"))
 OUT_DIR <- RAW_EXTENDED_DIR
 
 #' Parse Tournament Matchups into game results
@@ -102,20 +103,11 @@ main <- function() {
     mutate(DayZero = "2020-11-25") %>%
     arrange(Season)
 
-  # MNCAATourneySlots - use standard bracket from raw or jonathanpilafas
-  slots_path <- file.path(RAW_DIR, "MNCAATourneySlots.csv")
-  if (file.exists(slots_path)) {
-    slots <- read_csv(slots_path, show_col_types = FALSE)
-  } else {
-    # Create standard bracket structure
-    regions <- c("W", "X", "Y", "Z")
-    r1 <- tibble(
-      Slot = paste0("R1", rep(regions, each = 8), rep(1:8, 4)),
-      StrongSeed = paste0(rep(regions, each = 8), sprintf("%02d", rep(1:8, 4))),
-      WeakSeed = paste0(rep(regions, each = 8), sprintf("%02d", 16 - rep(0:7, 4)))
-    )
-    slots <- r1
-  }
+  # MNCAATourneySlots - always use correct NCAA bracket (R2 = 1v8, 2v7, 3v6, 4v5)
+  # Never use raw/Kaggle MNCAATourneySlots which has wrong R2 pairings (1v2, 3v4)
+  slots <- CORRECT_BRACKET_BASE %>%
+    rename(StrongSeed = Strong, WeakSeed = Weak) %>%
+    select(Slot, StrongSeed, WeakSeed)
 
   # Write output
   write_csv(tourney_results, file.path(OUT_DIR, "MNCAATourneyCompactResults.csv"))

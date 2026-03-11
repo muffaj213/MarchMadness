@@ -62,8 +62,9 @@ CORRECT_BRACKET_BASE <- tibble(
 
 #' Build slots for a single season (for use in 02_process_data)
 #' @param season Season year
-#' @param base_slots 64-team base slots from MNCAATourneySlots (used only when raw_historical lacks this season)
-#' @return Slots for that season with correct R2-R6 NCAA pairings
+#' @param base_slots Ignored. Kept for API compat. Kaggle MNCAATourneySlots has wrong R2
+#'   pairings (1v2, 3v4); we never use it. Fallback uses CORRECT_BRACKET_BASE.
+#' @return Slots for that season with correct R2-R6 NCAA pairings (1v8, 2v7, 3v6, 4v5)
 get_slots_for_season <- function(season, base_slots) {
   hist_path <- file.path(RAW_HIST_DIR, "TourneySlots.csv")
   if (file.exists(hist_path)) {
