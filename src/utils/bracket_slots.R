@@ -90,3 +90,4 @@ get_slots_for_season <- function(season, base_slots) {
     rename(StrongSeed = Strong, WeakSeed = Weak) %>%
     select(Slot, StrongSeed, WeakSeed)
 }
+
