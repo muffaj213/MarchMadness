@@ -377,15 +377,17 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
   seed_a <- if (length(seed_a) == 0) NA_integer_ else seed_a[1]
   seed_b <- if (length(seed_b) == 0) NA_integer_ else seed_b[1]
 
-  wp_a <- win_pct %>% filter(Season == season, TeamID == team_a) %>% pull(WinPct)
-  wp_b <- win_pct %>% filter(Season == season, TeamID == team_b) %>% pull(WinPct)
-  wp_a <- if (length(wp_a) == 0) 0.5 else wp_a[1]
-  wp_b <- if (length(wp_b) == 0) 0.5 else wp_b[1]
-
   pf_a <- points_stats %>% filter(Season == season, TeamID == team_a)
   pf_b <- points_stats %>% filter(Season == season, TeamID == team_b)
   margin_a <- if (nrow(pf_a) > 0) pf_a$PF_per_game[1] - pf_a$PA_per_game[1] else 0
   margin_b <- if (nrow(pf_b) > 0) pf_b$PF_per_game[1] - pf_b$PA_per_game[1] else 0
+
+  # Win pct: use 0.5 for teams with no regular-season data (no points_stats) to avoid
+  # KenPom-only win_pct from dominating vs teams with full data (inflates upset predictions)
+  wp_a <- win_pct %>% filter(Season == season, TeamID == team_a) %>% pull(WinPct)
+  wp_b <- win_pct %>% filter(Season == season, TeamID == team_b) %>% pull(WinPct)
+  wp_a <- if (length(wp_a) == 0 || nrow(pf_a) == 0) 0.5 else wp_a[1]
+  wp_b <- if (length(wp_b) == 0 || nrow(pf_b) == 0) 0.5 else wp_b[1]
 
   seed_diff <- if (is.na(seed_a) || is.na(seed_b)) 0 else (seed_b - seed_a)
   winpct_diff <- wp_a - wp_b
