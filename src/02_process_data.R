@@ -84,6 +84,18 @@ main <- function() {
     n_68 <- tourney_seeds %>% filter(Season >= 2011L, Season <= 2016L) %>% nrow()
     message("  Merged ", n_68, " 68-team seeds from raw_historical (2011-2016)")
   }
+  # Apply permanent seed overrides (historical corrections that never change)
+  overrides_path <- file.path(RAW_HIST_DIR, "seed_overrides.csv")
+  if (file.exists(overrides_path)) {
+    overrides <- read_csv(overrides_path, show_col_types = FALSE)
+    if (nrow(overrides) > 0) {
+      tourney_seeds <- tourney_seeds %>%
+        anti_join(overrides, by = c("Season", "Seed")) %>%
+        bind_rows(overrides) %>%
+        arrange(Season, Seed)
+      message("  Applied ", nrow(overrides), " seed override(s)")
+    }
+  }
   raw$tourney_seeds <- tourney_seeds
 
   # Consolidate duplicate TeamIDs (e.g. McNeese 1046->1116) so each team has one record
