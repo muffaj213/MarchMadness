@@ -2,7 +2,7 @@
 # 01c_convert_schedules_to_regular.R - Build MRegularSeasonCompactResults from schedules
 # =============================================================================
 # Converts raw_schedules/*.csv to M* format using TeamIDs from raw_extended (nishaanamin).
-# Uses season-specific TeamIDs from seeds so bracket prediction lookups match.
+# Maps schedule names to canonical (MTeams) via team_aliases.csv before lookup.
 # Run after 01b_build_historical_from_nishaa.R. Output: data/raw_extended/MRegularSeasonCompactResults.csv
 # =============================================================================
 
@@ -11,6 +11,7 @@ library(readr)
 library(dplyr)
 
 source(here("src", "config.R"))
+source(here("src", "utils", "bracket_utils.R"))
 TEAMS_PATH <- file.path(RAW_EXTENDED_DIR, "MTeams.csv")
 SEEDS_PATH <- file.path(RAW_EXTENDED_DIR, "MNCAATourneySeeds.csv")
 OUT_PATH <- file.path(RAW_EXTENDED_DIR, "MRegularSeasonCompactResults.csv")
@@ -96,11 +97,19 @@ main <- function() {
   if (length(all_games) == 0) stop("No valid schedule data.")
   games <- bind_rows(all_games)
 
-  # Resolve team names: season-specific first (for tournament teams), else global fallback
+  # Map schedule names to canonical (team_aliases) before lookup
+  # Resolve only distinct names (avoids repeated file reads)
+  team_names <- unique(c(trimws(as.character(games$Team)), trimws(as.character(games$Opp))))
+  canon_lookup <- setNames(
+    vapply(team_names, function(x) resolve_to_canonical(x), FUN.VALUE = character(1)),
+    team_names
+  )
   games <- games %>%
     mutate(
-      Team_name_lower = tolower(gsub("\\s+", " ", trimws(Team))),
-      Opp_name_lower = tolower(gsub("\\s+", " ", trimws(Opp)))
+      Team_canonical = canon_lookup[trimws(as.character(Team))],
+      Opp_canonical = canon_lookup[trimws(as.character(Opp))],
+      Team_name_lower = tolower(gsub("\\s+", " ", trimws(Team_canonical))),
+      Opp_name_lower = tolower(gsub("\\s+", " ", trimws(Opp_canonical)))
     )
   team_ids <- games %>%
     select(Season, Team_name_lower) %>%
