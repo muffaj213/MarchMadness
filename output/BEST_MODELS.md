@@ -26,10 +26,10 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 97.86 ± 1.86% | 0.4795 ± 0.4525 |
+| glm | baseline | 97.33 ± 2.44% | 0.6326 ± 0.5729 |
 | glmnet | baseline | 100.00 ± 0.00% | 0.0240 ± 0.0025 |
-| xgboost | baseline | 100.00 ± 0.00% | 0.0357 ± 0.0099 |
-| rand_forest | baseline | 100.00 ± 0.00% | 0.0980 ± 0.0010 |
+| xgboost | baseline | 100.00 ± 0.00% | 0.0328 ± 0.0075 |
+| rand_forest | baseline | 100.00 ± 0.00% | 0.1052 ± 0.0021 |
 
 ---
 
@@ -39,10 +39,10 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 98.93 ± 0.93% | 0.0392 ± 0.0390 |
-| glmnet | tuned | 99.47 ± 0.95% | 0.0107 ± 0.0045 |
-| xgboost | tuned | 100.00 ± 0.00% | 0.0121 ± 0.0031 |
-| rand_forest | tuned | 100.00 ± 0.00% | 0.0800 ± 0.0022 |
+| glm | tuned | 98.93 ± 0.93% | 0.0357 ± 0.0342 |
+| glmnet | tuned | 100.00 ± 0.00% | 0.0107 ± 0.0044 |
+| xgboost | tuned | 100.00 ± 0.00% | 0.0114 ± 0.0024 |
+| rand_forest | tuned | 100.00 ± 0.00% | 0.0825 ± 0.0015 |
 
 ---
 
@@ -52,7 +52,7 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| glmnet | tuned | 99.47 ± 0.95% | 0.0107 ± 0.0045 |
+| Best (log loss)| glmnet | tuned | 100.00 ± 0.00% | 0.0107 ± 0.0044 |
 
 ---
 
@@ -62,19 +62,19 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 100.00 ± 0.00% | 0.0275 ± 0.0085 | 187 |
+| Ensemble | 100.00 ± 0.00% | 0.0285 ± 0.0092 | 187 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
 |-------------|--------|
-| glm_baseline | 0.199 |
-| glm_tuned | 0.194 |
+| glm_baseline | 0.200 |
+| glm_tuned | 0.195 |
 | glmnet_baseline | 0.086 |
 | glmnet_tuned | 0.133 |
 | xgboost_baseline | 0.103 |
-| xgboost_tuned | 0.150 |
-| rand_forest_baseline | 0.057 |
+| xgboost_tuned | 0.151 |
+| rand_forest_baseline | 0.055 |
 | rand_forest_tuned | 0.078 |
 
 *Weights updated 2026-03-11*
