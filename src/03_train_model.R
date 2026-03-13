@@ -18,8 +18,9 @@ CONFIG_DIR <- here("config")
 # Validation strategy: time-based splits avoid overfitting to random folds
 # - Tuning: expanding-window CV (train on past seasons, validate on next)
 # - Holdout: multiple years for mean +/- SD (reduces variance from single year)
-# For production (e.g. predict 2025): set TRAIN_SEASONS_END=2024, TEST_SEASONS=2024
-TRAIN_SEASONS_END <- 2021L  # Last season for training (test years must be > this)
+# For production (e.g. predict 2026): train through 2025 for best generalization.
+# Holdout years (2022-2024) used for model selection; 2025 in training adds 63 examples.
+TRAIN_SEASONS_END <- 2025L  # Last season for training (includes 2025 tournament results)
 TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/- SD)
 TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
 WEIGHT_TUNE_YEARS <- c(2019L, 2020L, 2021L)  # Multiple years for weight tuning (avoids overfitting to single year)
@@ -637,6 +638,13 @@ main <- function() {
 
   train_data <- matchup_data %>% filter(Season <= TRAIN_SEASONS_END)
   if (nrow(train_data) == 0) train_data <- matchup_data %>% filter(Season < max(Season))
+  n_2025 <- sum(matchup_data$Season == 2025L, na.rm = TRUE)
+  if (TRAIN_SEASONS_END >= 2025L && n_2025 == 0) {
+    message("NOTE: No 2025 tournament results in matchup_data. To include 2025 in training, ",
+            "ensure data/raw_nishaa/Tournament Matchups.csv has 2025 results (or re-download nishaanamin/march-madness-data).")
+  } else if (n_2025 > 0) {
+    message("Training includes ", n_2025, " games from 2025 tournament.")
+  }
   test_years <- TEST_SEASONS
 
   # Ensure baseline config exists
