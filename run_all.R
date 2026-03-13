@@ -48,13 +48,39 @@ if (dir.exists(RAW_EXTENDED_DIR) && file.exists(here("scripts", "fix_seeds_from_
 }
 has_extended <- dir.exists(RAW_EXTENDED_DIR) && all(file.exists(paths_ext))
 
-# Step 1c3: Try to fetch 2025 schedule via toRvik (optional; API may not have 2025 yet)
-if (file.exists(here("scripts", "fetch_2025_schedule.R"))) {
-  message("\n--- Step 1c3: Fetch 2025 schedule (toRvik) ---")
-  tryCatch(
-    { source(here("scripts", "fetch_2025_schedule.R")) },
-    error = function(e) message("  2025 fetch skipped: ", conditionMessage(e))
-  )
+# Step 1c3: Fetch schedule for 2025 (and 2026). Tries toRvik-data GitHub first (2008-2023),
+# then bart_game_box API. See docs/DATA_SOURCES_2025_2026.md for alternatives.
+if (file.exists(here("scripts", "fetch_schedule_torvik_github.R"))) {
+  message("\n--- Step 1c3: Fetch schedule (GitHub + toRvik) ---")
+  for (yr in c(2025L, 2026L)) {
+    tryCatch(
+      { source(here("scripts", "fetch_schedule_torvik_github.R"), local = new.env()) },
+      error = function(e) message("  ", yr, " skipped: ", conditionMessage(e))
+    )
+  }
+  # If GitHub lacked 2025/2026, try cbbdata API (then bart_game_box)
+  for (yr in c(2025L, 2026L)) {
+    sched_label <- paste0(yr - 1L, "-", sprintf("%02d", yr %% 100))
+    sched_file <- file.path(SCHEDULES_DIR, paste0(sched_label, "_schedule.csv"))
+    if (!file.exists(sched_file) && file.exists(here("scripts", "fetch_schedule_cbbdata.R"))) {
+      tryCatch(
+        {
+          old <- Sys.getenv("CBD_FETCH_YEAR")
+          Sys.setenv(CBD_FETCH_YEAR = as.character(yr))
+          on.exit(Sys.setenv(CBD_FETCH_YEAR = old), add = TRUE)
+          source(here("scripts", "fetch_schedule_cbbdata.R"), local = new.env())
+        },
+        error = function(e) message("  cbbdata ", yr, " skipped: ", conditionMessage(e))
+      )
+    }
+  }
+  if (!file.exists(file.path(SCHEDULES_DIR, "2024-25_schedule.csv")) &&
+      file.exists(here("scripts", "fetch_2025_schedule.R"))) {
+    tryCatch(
+      { source(here("scripts", "fetch_2025_schedule.R")) },
+      error = function(e) message("  bart_game_box fallback skipped: ", conditionMessage(e))
+    )
+  }
 }
 
 schedule_files <- if (dir.exists(SCHEDULES_DIR)) {

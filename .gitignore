@@ -57,3 +57,6 @@ output/*.txt
 
 # Large files
 *.feather
+
+# cbbdata setup (contains credentials)
+scripts/setup_cbbdata.R

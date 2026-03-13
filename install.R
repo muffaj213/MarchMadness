@@ -14,7 +14,8 @@ packages <- c(
   "readxl",      # read Excel for projected bracket template
   "xgboost",     # gradient boosting for xgboost model
   "ranger",      # random forest for rand_forest model
-  "toRvik"       # Barttorvik ratings for KenPom gap (2018-2023)
+  "toRvik",      # Barttorvik ratings for KenPom gap (2018-2023)
+  "cbbdata"      # Barttorvik game box 2008-present (2025/2026 schedules)
 )
 
 for (pkg in packages) {
@@ -28,6 +29,15 @@ for (pkg in packages) {
         )
       } else {
         message("toRvik: install devtools, then devtools::install_github('andreweatherman/toRvik')")
+      }
+    } else if (pkg == "cbbdata") {
+      if (requireNamespace("devtools", quietly = TRUE)) {
+        tryCatch(
+          devtools::install_github("andreweatherman/cbbdata"),
+          error = function(e) message("cbbdata: install with devtools::install_github('andreweatherman/cbbdata')")
+        )
+      } else {
+        message("cbbdata: install devtools, then devtools::install_github('andreweatherman/cbbdata')")
       }
     } else {
       install.packages(pkg, repos = "https://cloud.r-project.org/")
