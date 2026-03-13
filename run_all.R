@@ -48,6 +48,15 @@ if (dir.exists(RAW_EXTENDED_DIR) && file.exists(here("scripts", "fix_seeds_from_
 }
 has_extended <- dir.exists(RAW_EXTENDED_DIR) && all(file.exists(paths_ext))
 
+# Step 1c3: Try to fetch 2025 schedule via toRvik (optional; API may not have 2025 yet)
+if (file.exists(here("scripts", "fetch_2025_schedule.R"))) {
+  message("\n--- Step 1c3: Fetch 2025 schedule (toRvik) ---")
+  tryCatch(
+    { source(here("scripts", "fetch_2025_schedule.R")) },
+    error = function(e) message("  2025 fetch skipped: ", conditionMessage(e))
+  )
+}
+
 schedule_files <- if (dir.exists(SCHEDULES_DIR)) {
   list.files(SCHEDULES_DIR, pattern = "[0-9]{4}-[0-9]{2}_schedule\\.csv$", full.names = TRUE)
 } else character()
