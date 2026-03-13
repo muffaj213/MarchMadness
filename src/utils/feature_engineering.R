@@ -601,6 +601,8 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
   upset_seed_gap <- seed_diff * pmax(0, 7L - round_num)
 
   # H2H, SOS, rest (from head_to_head, sos_stats, rest_stats when provided)
+  # Shrink h2h_team_a_winpct toward 0.5 when h2h_games < 3 (reduces over-reliance on 1-2 game samples)
+  H2H_SHRINK_MIN_GAMES <- 3L
   h2h_winpct <- 0.5
   h2h_games_val <- 0L
   if (!is.null(head_to_head) && nrow(head_to_head) > 0) {
@@ -611,7 +613,10 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
       h2h_games_val <- as.integer(h2h_row$h2h_games[1])
       if (h2h_games_val > 0) {
         wins <- if (team_a == t1) h2h_row$h2h_team1_wins[1] else (h2h_row$h2h_games[1] - h2h_row$h2h_team1_wins[1])
-        h2h_winpct <- wins / h2h_row$h2h_games[1]
+        raw_winpct <- wins / h2h_row$h2h_games[1]
+        # Shrink toward 0.5 when sample size is small
+        weight <- min(1.0, as.numeric(h2h_games_val) / H2H_SHRINK_MIN_GAMES)
+        h2h_winpct <- 0.5 + (raw_winpct - 0.5) * weight
       }
     }
   }

@@ -111,19 +111,32 @@ main <- function() {
       Team_name_lower = tolower(gsub("\\s+", " ", trimws(Team_canonical))),
       Opp_name_lower = tolower(gsub("\\s+", " ", trimws(Opp_canonical)))
     )
+  # Also use team_name_master for ID lookup (covers teams not in MTeams but in tourney history)
+  master_path <- file.path(PROC_DIR, "team_name_master.csv")
+  master_lookup <- if (file.exists(master_path)) {
+    master <- read_csv(master_path, show_col_types = FALSE)
+    name_col <- intersect(names(master), c("Name", "TeamName"))[1]
+    if (is.na(name_col)) name_col <- names(master)[1]
+    master %>% mutate(name_lower = tolower(gsub("\\s+", " ", trimws(!!sym(name_col))))) %>%
+      group_by(name_lower) %>% slice(1) %>% ungroup() %>%
+      select(name_lower, TeamID_master = PreferredTeamID)
+  } else NULL
+
   team_ids <- games %>%
     select(Season, Team_name_lower) %>%
     distinct() %>%
     left_join(season_map %>% select(Season, name_lower, TeamID), by = c("Season", "Team_name_lower" = "name_lower")) %>%
     left_join(global_lookup %>% select(name_lower, TeamID) %>% rename(TeamID_global = TeamID), by = c("Team_name_lower" = "name_lower")) %>%
-    mutate(TeamID = coalesce(TeamID, TeamID_global)) %>%
+    { if (!is.null(master_lookup)) left_join(., master_lookup, by = c("Team_name_lower" = "name_lower")) else mutate(., TeamID_master = NA_integer_) } %>%
+    mutate(TeamID = coalesce(TeamID, TeamID_global, TeamID_master)) %>%
     select(Season, Team_name_lower, TeamID)
   opp_ids <- games %>%
     select(Season, Opp_name_lower) %>%
     distinct() %>%
     left_join(season_map %>% select(Season, name_lower, TeamID), by = c("Season", "Opp_name_lower" = "name_lower")) %>%
     left_join(global_lookup %>% select(name_lower, TeamID) %>% rename(TeamID_global = TeamID), by = c("Opp_name_lower" = "name_lower")) %>%
-    mutate(OppID = coalesce(TeamID, TeamID_global)) %>%
+    { if (!is.null(master_lookup)) left_join(., master_lookup, by = c("Opp_name_lower" = "name_lower")) else mutate(., TeamID_master = NA_integer_) } %>%
+    mutate(OppID = coalesce(TeamID, TeamID_global, TeamID_master)) %>%
     select(Season, Opp_name_lower, OppID)
   # Use Win column for winner (PF/PA may be game-total, not team perspective)
   games <- games %>%
