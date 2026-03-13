@@ -212,8 +212,17 @@ load_for_prediction <- function(seeds_file = NULL) {
 #' @param seeds_file Optional path to seeds CSV for projected bracket. If NULL, use tourney_seeds.csv.
 #' @param use_projected_output If TRUE, write to bracket_prediction_projected_YEAR.csv
 #' @param deterministic If TRUE, pick higher-probability team; if FALSE, sample
+# Manual seeds override: use this file for 2025 predictions (correct bracket from Selection Sunday)
+SEEDS_2025_PATH <- file.path(BRACKET_DIR, "seeds_68team_2025.csv")
+
 main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
+
+  # Use manual 2025 seeds when predicting 2025 and no seeds_file specified
+  if (season == 2025L && is.null(seeds_file) && file.exists(SEEDS_2025_PATH)) {
+    seeds_file <- SEEDS_2025_PATH
+    message("Using manual seeds: ", SEEDS_2025_PATH)
+  }
 
   message("Loading model and data...")
   data <- load_for_prediction(seeds_file = seeds_file)
