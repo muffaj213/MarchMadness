@@ -72,6 +72,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                             recent_win_pct = NULL, recent_mov = NULL, home_away_stats = NULL, resume_stats = NULL,
                             head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
                             conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
+                            tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
                             deterministic = FALSE) {
   # compute_matchup_features is sourced by 02_process_data or 04_predict_bracket before calling simulate_bracket
 
@@ -128,6 +129,8 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                                          recent_win_pct = recent_win_pct, recent_mov = recent_mov,
                                          conference_stats = conference_stats, quadrant_stats = quadrant_stats,
                                          first_four_stats = first_four_stats,
+                                         tourney_history_stats = tourney_history_stats, tourney_h2h = tourney_h2h,
+                                         upset_history = upset_history,
                                          round = round_num)
 
     pred <- tryCatch(

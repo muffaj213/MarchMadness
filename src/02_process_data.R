@@ -199,6 +199,14 @@ main <- function() {
   if (nrow(quadrant_stats) > 0) message("  Quadrant stats: ", nrow(quadrant_stats), " team-season rows")
   if (nrow(first_four_stats) > 0) message("  First Four teams: ", nrow(first_four_stats), " teams")
 
+  message("Computing historical tournament features (past 5 years, no leakage)...")
+  tourney_history_stats <- compute_tourney_history_stats(raw$tourney_results, raw$tourney_seeds, n_years = 5L)
+  tourney_h2h <- compute_tourney_h2h(raw$tourney_results)
+  upset_history <- compute_upset_history(raw$tourney_results, raw$tourney_seeds, n_years = 5L)
+  if (nrow(tourney_history_stats) > 0) message("  Tourney history: ", nrow(tourney_history_stats), " team-season rows")
+  if (nrow(tourney_h2h) > 0) message("  Tourney H2H: ", nrow(tourney_h2h), " pair-season rows")
+  if (nrow(upset_history) > 0) message("  Upset history: ", nrow(upset_history), " team-season rows")
+
   message("Building matchup training data...")
   matchup_data <- build_matchup_data(
     tourney_results,
@@ -216,7 +224,10 @@ main <- function() {
     recent_mov = recent_mov,
     conference_stats = conference_stats,
     quadrant_stats = quadrant_stats,
-    first_four_stats = first_four_stats
+    first_four_stats = first_four_stats,
+    tourney_history_stats = tourney_history_stats,
+    tourney_h2h = tourney_h2h,
+    upset_history = upset_history
   )
 
   message("Saving processed data...")
@@ -236,6 +247,9 @@ main <- function() {
   }
   write_csv(matchup_data, file.path(PROC_DIR, "matchup_data.csv"))
   if (nrow(head_to_head) > 0) write_csv(head_to_head, file.path(PROC_DIR, "head_to_head.csv"))
+  if (nrow(tourney_history_stats) > 0) write_csv(tourney_history_stats, file.path(PROC_DIR, "tourney_history_stats.csv"))
+  if (nrow(tourney_h2h) > 0) write_csv(tourney_h2h, file.path(PROC_DIR, "tourney_h2h.csv"))
+  if (nrow(upset_history) > 0) write_csv(upset_history, file.path(PROC_DIR, "upset_history.csv"))
   if (nrow(sos_stats) > 0) write_csv(sos_stats, file.path(PROC_DIR, "sos_stats.csv"))
   if (nrow(rest_stats) > 0) write_csv(rest_stats, file.path(PROC_DIR, "rest_stats.csv"))
   if (nrow(home_away_stats) > 0) write_csv(home_away_stats, file.path(PROC_DIR, "home_away_stats.csv"))

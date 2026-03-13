@@ -125,6 +125,41 @@ load_for_prediction <- function(seeds_file = NULL) {
   conference_stats <- read_optional_csv(file.path(PROC_DIR, "conference_stats.csv"))
   quadrant_stats <- read_optional_csv(file.path(PROC_DIR, "quadrant_stats.csv"))
   first_four_stats <- read_optional_csv(file.path(PROC_DIR, "first_four_stats.csv"))
+  tourney_history_stats <- read_optional_csv(file.path(PROC_DIR, "tourney_history_stats.csv"))
+  tourney_h2h <- read_optional_csv(file.path(PROC_DIR, "tourney_h2h.csv"))
+  upset_history <- read_optional_csv(file.path(PROC_DIR, "upset_history.csv"))
+
+  # Compute historical tournament features for prediction seasons not in saved data (e.g. 2026)
+  tourney_results_path <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
+  if (!file.exists(tourney_results_path)) tourney_results_path <- file.path(RAW_DIR, "MNCAATourneyCompactResults.csv")
+  pred_seasons <- setdiff(seeds_seasons, if (!is.null(tourney_history_stats) && nrow(tourney_history_stats) > 0) unique(tourney_history_stats$Season) else integer())
+  if (length(pred_seasons) > 0 && file.exists(tourney_results_path)) {
+    tourney_results <- read_csv(tourney_results_path, show_col_types = FALSE)
+    if (!"WTeamID" %in% names(tourney_results)) {
+      idx <- grep("W.*Team|Winner|Wteam", names(tourney_results), ignore.case = TRUE)
+      if (length(idx) >= 1) names(tourney_results)[idx[1]] <- "WTeamID"
+    }
+    if (!"LTeamID" %in% names(tourney_results)) {
+      idx <- grep("L.*Team|Loser|Lteam", names(tourney_results), ignore.case = TRUE)
+      if (length(idx) >= 1) names(tourney_results)[idx[1]] <- "LTeamID"
+    }
+    predict_seeds <- seeds %>% filter(Season %in% pred_seasons) %>% select(Season, TeamID)
+    th_pred <- compute_tourney_history_stats(tourney_results, seeds, n_years = 5L, predict_seeds = predict_seeds)
+    uh_pred <- compute_upset_history(tourney_results, seeds, n_years = 5L, predict_seeds = predict_seeds)
+    tourney_history_stats <- if (is.null(tourney_history_stats) || nrow(tourney_history_stats) == 0) {
+      th_pred
+    } else {
+      bind_rows(tourney_history_stats, th_pred %>% filter(Season %in% pred_seasons)) %>%
+        distinct(Season, TeamID, .keep_all = TRUE)
+    }
+    upset_history <- if (is.null(upset_history) || nrow(upset_history) == 0) {
+      uh_pred
+    } else {
+      bind_rows(upset_history, uh_pred %>% filter(Season %in% pred_seasons)) %>%
+        distinct(Season, TeamID, .keep_all = TRUE)
+    }
+    if (nrow(th_pred) > 0) message("Computed tourney history for prediction season(s) ", paste(pred_seasons, collapse = ", "))
+  }
 
   # Fill missing win_pct from KenPom for seasons not in regular-season data (e.g. 2025)
   # Uses kenpom_stats (already augmented above if prediction season was missing)
@@ -165,7 +200,10 @@ load_for_prediction <- function(seeds_file = NULL) {
     rest_stats = rest_stats,
     conference_stats = conference_stats,
     quadrant_stats = quadrant_stats,
-    first_four_stats = first_four_stats
+    first_four_stats = first_four_stats,
+    tourney_history_stats = tourney_history_stats,
+    tourney_h2h = tourney_h2h,
+    upset_history = upset_history
   )
 }
 
@@ -219,6 +257,9 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     conference_stats = data$conference_stats,
     quadrant_stats = data$quadrant_stats,
     first_four_stats = data$first_four_stats,
+    tourney_history_stats = data$tourney_history_stats,
+    tourney_h2h = data$tourney_h2h,
+    upset_history = data$upset_history,
     deterministic = deterministic
   )
 

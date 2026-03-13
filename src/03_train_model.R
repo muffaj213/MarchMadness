@@ -17,12 +17,14 @@ CONFIG_DIR <- here("config")
 # Model configuration
 # Validation strategy: time-based splits avoid overfitting to random folds
 # - Tuning: expanding-window CV (train on past seasons, validate on next)
+# - Stricter CV: use last 2-3 years only for validation (reduces overfitting to distant past)
 # - Holdout: multiple years for mean +/- SD (reduces variance from single year)
 # For production (e.g. predict 2026): train through 2025 for best generalization.
 # Holdout years (2022-2024) used for model selection; 2025 in training adds 63 examples.
 TRAIN_SEASONS_END <- 2025L  # Last season for training (includes 2025 tournament results)
 TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/- SD)
-TUNE_VALIDATION_FIRST_YEAR <- 2015L  # First CV validation year (need ~7 train years before)
+TUNE_VALIDATION_FIRST_YEAR <- 2020L  # Stricter: validate on 2020+ only (last 5 years)
+TUNE_VALIDATION_LAST_N_YEARS <- 5L   # Max validation folds (recent years only)
 WEIGHT_TUNE_YEARS <- c(2019L, 2020L, 2021L)  # Multiple years for weight tuning (avoids overfitting to single year)
 ENTROPY_REGULARIZATION <- 0.03  # Penalize weight concentration; higher = more uniform weights
 SKIP_ENSEMBLE_CALIBRATION <- TRUE  # Platt scaling overfits on ~120 games; skip until we have more data
@@ -31,14 +33,16 @@ MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
                        "is_upset_matchup", "upset_seed_gap", "seed_winpct_interaction", "pf_diff", "round",
                        "h2h_team_a_winpct", "h2h_games", "sos_diff", "rest_diff",
-                       "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff")
+                       "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff",
+                       "tourney_winpct_diff", "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games", "upset_winpct_diff")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
                          "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction",
                          "seed_barthag_interaction", "seed_recentmov_interaction")
 
 # -----------------------------------------------------------------------------
-# BASELINE: Fixed parameters (original setup)
+# BASELINE: Regularized to reduce overfitting (~63 games/year)
+# Trees: fewer trees, higher min_n, shallower depth, early stopping
 # -----------------------------------------------------------------------------
 BASELINE_SPECS <- list(
   glm = list(
@@ -54,17 +58,19 @@ BASELINE_SPECS <- list(
     note = "LASSO (L1) for feature selection"
   ),
   xgboost = list(
-    trees = 200,
-    min_n = 5,
-    learn_rate = 0.1,
+    trees = 150,
+    min_n = 15,
+    learn_rate = 0.05,
+    tree_depth = 3,
     engine = "xgboost",
-    note = "Fixed params"
+    stop_iter = 10,
+    note = "Regularized: shallow trees, early stopping"
   ),
   rand_forest = list(
-    trees = 500,
-    min_n = 5,
+    trees = 200,
+    min_n = 15,
     engine = "ranger",
-    note = "Fixed params"
+    note = "Regularized: fewer trees, higher min_n"
   )
 )
 
@@ -83,9 +89,15 @@ build_baseline_workflow <- function(model_type, matchup_data) {
     glm = logistic_reg(penalty = 0, mixture = 0) %>% set_engine("glm"),
     glmnet = logistic_reg(penalty = 0.01, mixture = 1) %>% set_engine("glmnet"),
     xgboost = boost_tree(mode = "classification", engine = "xgboost",
-                        trees = 200, min_n = 5, learn_rate = 0.1),
+                        trees = BASELINE_SPECS$xgboost$trees,
+                        min_n = BASELINE_SPECS$xgboost$min_n,
+                        learn_rate = BASELINE_SPECS$xgboost$learn_rate,
+                        tree_depth = BASELINE_SPECS$xgboost$tree_depth,
+                        stop_iter = BASELINE_SPECS$xgboost$stop_iter) %>%
+      set_engine("xgboost", validation = 0.15),
     rand_forest = rand_forest(mode = "classification", engine = "ranger",
-                             trees = 500, min_n = 5) %>%
+                             trees = BASELINE_SPECS$rand_forest$trees,
+                             min_n = BASELINE_SPECS$rand_forest$min_n) %>%
       set_engine("ranger", importance = "impurity"),
     stop("Unknown model_type: ", model_type)
   )
@@ -111,7 +123,8 @@ build_tuned_workflow <- function(model_type, matchup_data) {
     glmnet = logistic_reg(penalty = tune(), mixture = 1) %>% set_engine("glmnet"),  # LASSO: mixture=1
     xgboost = boost_tree(mode = "classification", engine = "xgboost",
                         trees = tune(), min_n = tune(), learn_rate = tune(),
-                        tree_depth = tune()),
+                        tree_depth = tune(), stop_iter = 10) %>%
+      set_engine("xgboost", validation = 0.15),
     rand_forest = rand_forest(mode = "classification", engine = "ranger",
                              trees = tune(), min_n = tune(), mtry = tune()) %>%
       set_engine("ranger", importance = "impurity"),
@@ -126,11 +139,18 @@ build_tuned_workflow <- function(model_type, matchup_data) {
 #' Create time-based resampling splits (expanding window by season)
 #' Each fold: train on seasons < validation_year, validate on validation_year
 #' Ensures no future data leaks into training.
-make_time_folds <- function(data, first_validation_year = TUNE_VALIDATION_FIRST_YEAR) {
+#' Uses only last N years for validation (stricter CV to reduce overfitting).
+make_time_folds <- function(data, first_validation_year = TUNE_VALIDATION_FIRST_YEAR,
+                            last_n_years = TUNE_VALIDATION_LAST_N_YEARS) {
   if (!"Season" %in% names(data)) stop("data must have Season column")
   data <- data %>% arrange(Season)
   seasons <- sort(unique(data$Season))
   validation_years <- seasons[seasons >= first_validation_year]
+  # Stricter: use only last N years for validation (reduces overfitting to distant past)
+  if (length(validation_years) > last_n_years) {
+    validation_years <- tail(validation_years, last_n_years)
+    message("  Using last ", last_n_years, " validation years: ", paste(validation_years, collapse = ", "))
+  }
   if (length(validation_years) < 2) {
     message("Fewer than 2 validation years; falling back to vfold_cv")
     return(vfold_cv(data, v = min(5, nrow(data) %/% 20), strata = outcome))
@@ -283,21 +303,21 @@ run_tuned <- function(train_data, matchup_data, test_years) {
       ),
       glmnet = grid_regular(penalty(), levels = 20),  # LASSO: tune penalty only (mixture=1 fixed)
       xgboost = dplyr::bind_rows(
-        tibble(trees = 200, min_n = 5, learn_rate = 0.1, tree_depth = 6),  # baseline
+        tibble(trees = 150, min_n = 15, learn_rate = 0.05, tree_depth = 3),  # regularized baseline
         grid_space_filling(
-          trees(range = c(100, 500)),
-          min_n(range = c(2, 10)),
-          learn_rate(range = c(-2, -0.5), trans = log10_trans()),
-          tree_depth(range = c(3, 8)),
+          trees(range = c(80, 200)),
+          min_n(range = c(10, 25)),
+          learn_rate(range = c(-2, -0.7), trans = log10_trans()),
+          tree_depth(range = c(2, 4)),
           size = 11
         )
       ),
       rand_forest = dplyr::bind_rows(
-        tibble(trees = 500, min_n = 5, mtry = 4),  # baseline
+        tibble(trees = 200, min_n = 15, mtry = 4),  # regularized baseline
         grid_space_filling(
-          trees(range = c(300, 800)),
-          min_n(range = c(2, 15)),
-          mtry(range = c(2, 8)),
+          trees(range = c(100, 350)),
+          min_n(range = c(10, 25)),
+          mtry(range = c(2, 6)),
           size = 11
         )
       )

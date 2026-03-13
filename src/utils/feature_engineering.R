@@ -204,6 +204,169 @@ compute_sos <- function(regular_results, win_pct) {
     summarise(sos = mean(OppWinPct, na.rm = TRUE), .groups = "drop")
 }
 
+#' Compute historical tournament stats per team (past N years only, no leakage)
+#' For predicting season S, uses only data from seasons < S.
+#' @param tourney_results Tournament results (WTeamID, LTeamID, Season, DayNum)
+#' @param seeds Seeds (Season, Seed, TeamID) for seed numbers
+#' @param n_years Number of past years to include (default 5)
+#' @param predict_seeds Optional tibble (Season, TeamID) for prediction seasons (no results yet)
+#' @return Tibble Season, TeamID, tourney_win_pct_5y, tourney_games_5y, deepest_run_5y
+compute_tourney_history_stats <- function(tourney_results, seeds, n_years = 5L, predict_seeds = NULL) {
+  if (nrow(tourney_results) == 0 && (is.null(predict_seeds) || nrow(predict_seeds) == 0)) {
+    return(tibble(Season = integer(), TeamID = integer(),
+                  tourney_win_pct_5y = numeric(), tourney_games_5y = integer(), deepest_run_5y = integer()))
+  }
+  seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
+  # Build game-level rows: each team in each game with round reached
+  team_games <- tibble(Season = integer(), TeamID = integer(), Won = integer(), Round = integer())
+  if (nrow(tourney_results) > 0) {
+    games_long <- tourney_results %>%
+      filter(!is.na(WTeamID), !is.na(LTeamID)) %>%
+      left_join(seeds %>% select(Season, WTeamID = TeamID, WSeed = SeedNum), by = c("Season", "WTeamID")) %>%
+      left_join(seeds %>% select(Season, LTeamID = TeamID, LSeed = SeedNum), by = c("Season", "LTeamID")) %>%
+      mutate(round = if ("DayNum" %in% names(.)) daynum_to_round(DayNum) else 1L)
+    team_games <- games_long %>%
+      mutate(TeamID = WTeamID, Won = 1L, Round = round) %>%
+      select(Season, TeamID, Won, Round) %>%
+      bind_rows(
+        games_long %>% mutate(TeamID = LTeamID, Won = 0L, Round = round) %>%
+          select(Season, TeamID, Won, Round)
+      )
+  }
+  # Include prediction seasons (teams from seeds, no games yet)
+  if (!is.null(predict_seeds) && nrow(predict_seeds) > 0) {
+    pred_teams <- predict_seeds %>% distinct(Season, TeamID)
+    seasons_in_pred <- setdiff(unique(pred_teams$Season), unique(team_games$Season))
+    for (s in seasons_in_pred) {
+      teams_s <- pred_teams %>% filter(Season == s) %>% pull(TeamID)
+      team_games <- bind_rows(team_games,
+        tibble(Season = s, TeamID = teams_s, Won = NA_integer_, Round = NA_integer_))
+    }
+  }
+  seasons <- sort(unique(team_games$Season))
+  out_list <- list()
+  for (s in seasons) {
+    past <- team_games %>% filter(Season < s, Season >= s - n_years, !is.na(Won))
+    teams_this_year <- team_games %>% filter(Season == s) %>% distinct(TeamID) %>% pull(TeamID)
+    for (tid in teams_this_year) {
+      hist <- past %>% filter(TeamID == tid)
+      if (nrow(hist) == 0) {
+        out_list[[length(out_list) + 1]] <- tibble(Season = s, TeamID = tid,
+          tourney_win_pct_5y = 0.5, tourney_games_5y = 0L, deepest_run_5y = 0L)
+        next
+      }
+      wins <- sum(hist$Won)
+      games <- nrow(hist)
+      deepest <- max(hist$Round, na.rm = TRUE)
+      out_list[[length(out_list) + 1]] <- tibble(Season = s, TeamID = tid,
+        tourney_win_pct_5y = if (games > 0) wins / games else 0.5,
+        tourney_games_5y = games,
+        deepest_run_5y = deepest)
+    }
+  }
+  if (length(out_list) == 0) {
+    return(tibble(Season = integer(), TeamID = integer(),
+                  tourney_win_pct_5y = numeric(), tourney_games_5y = integer(), deepest_run_5y = integer()))
+  }
+  bind_rows(out_list)
+}
+
+#' Compute head-to-head in past tournaments (no leakage)
+#' For season S, counts games between Team1 and Team2 in seasons < S.
+#' @param tourney_results Tournament results (WTeamID, LTeamID, Season)
+#' @return Tibble Season, Team1, Team2, tourney_h2h_games, tourney_h2h_team1_wins
+compute_tourney_h2h <- function(tourney_results) {
+  if (nrow(tourney_results) == 0) {
+    return(tibble(Season = integer(), Team1 = integer(), Team2 = integer(),
+                  tourney_h2h_games = integer(), tourney_h2h_team1_wins = integer()))
+  }
+  h2h_raw <- tourney_results %>%
+    mutate(Team1 = pmin(WTeamID, LTeamID), Team2 = pmax(WTeamID, LTeamID),
+           Team1Won = as.integer(WTeamID == Team1)) %>%
+    select(Season, Team1, Team2, Team1Won)
+  seasons <- sort(unique(h2h_raw$Season))
+  out_list <- list()
+  for (s in seasons) {
+    pairs <- h2h_raw %>% filter(Season == s) %>%
+      distinct(Team1, Team2) %>%
+      mutate(Season = s)
+    past <- h2h_raw %>% filter(Season < s)
+    if (nrow(past) == 0) {
+      out_list <- c(out_list, lapply(seq_len(nrow(pairs)), function(i) {
+        tibble(Season = s, Team1 = pairs$Team1[i], Team2 = pairs$Team2[i],
+               tourney_h2h_games = 0L, tourney_h2h_team1_wins = 0L)
+      }))
+      next
+    }
+    for (i in seq_len(nrow(pairs))) {
+      t1 <- pairs$Team1[i]; t2 <- pairs$Team2[i]
+      past_games <- past %>% filter(Team1 == t1, Team2 == t2)
+      ng <- nrow(past_games)
+      nw <- if (ng > 0) sum(past_games$Team1Won) else 0L
+      out_list[[length(out_list) + 1]] <- tibble(Season = s, Team1 = t1, Team2 = t2,
+        tourney_h2h_games = as.integer(ng), tourney_h2h_team1_wins = as.integer(nw))
+    }
+  }
+  if (length(out_list) == 0) return(tibble(Season = integer(), Team1 = integer(), Team2 = integer(),
+    tourney_h2h_games = integer(), tourney_h2h_team1_wins = integer()))
+  bind_rows(out_list)
+}
+
+#' Compute upset history: how often team won as underdog in past tournaments
+#' Underdog = lower seed (higher seed number). Uses only past seasons.
+#' @param tourney_results Tournament results (WTeamID, LTeamID, Season)
+#' @param seeds Seeds (Season, Seed, TeamID)
+#' @param n_years Number of past years (default 5)
+#' @return Tibble Season, TeamID, upset_win_pct, upset_wins, upset_games
+#' @param predict_seeds Optional (Season, TeamID) for prediction seasons
+compute_upset_history <- function(tourney_results, seeds, n_years = 5L, predict_seeds = NULL) {
+  if (nrow(tourney_results) == 0 && (is.null(predict_seeds) || nrow(predict_seeds) == 0)) {
+    return(tibble(Season = integer(), TeamID = integer(),
+                  upset_win_pct = numeric(), upset_wins = integer(), upset_games = integer()))
+  }
+  seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
+  games <- tourney_results %>%
+    left_join(seeds %>% select(Season, WTeamID = TeamID, WSeed = SeedNum), by = c("Season", "WTeamID")) %>%
+    left_join(seeds %>% select(Season, LTeamID = TeamID, LSeed = SeedNum), by = c("Season", "LTeamID")) %>%
+    mutate(winner_was_underdog = as.integer(WSeed > LSeed))  # higher seed num = worse = underdog
+  team_upsets <- if (nrow(games) > 0) {
+    games %>%
+      mutate(TeamID = WTeamID, WasUnderdog = winner_was_underdog, Won = 1L) %>%
+      select(Season, TeamID, WasUnderdog, Won) %>%
+      bind_rows(
+        games %>% mutate(TeamID = LTeamID, WasUnderdog = as.integer(LSeed > WSeed), Won = 0L) %>%
+          select(Season, TeamID, WasUnderdog, Won)
+      )
+  } else {
+    tibble(Season = integer(), TeamID = integer(), WasUnderdog = integer(), Won = integer())
+  }
+  if (!is.null(predict_seeds) && nrow(predict_seeds) > 0) {
+    pred_teams <- predict_seeds %>% distinct(Season, TeamID) %>%
+      mutate(WasUnderdog = NA_integer_, Won = NA_integer_)
+    team_upsets <- bind_rows(team_upsets, pred_teams)
+  }
+  seasons <- sort(unique(team_upsets$Season))
+  out_list <- list()
+  for (s in seasons) {
+    past <- team_upsets %>% filter(Season < s, Season >= s - n_years, WasUnderdog == 1L)
+    teams_this_year <- team_upsets %>% filter(Season == s) %>% distinct(TeamID) %>% pull(TeamID)
+    for (tid in teams_this_year) {
+      hist <- past %>% filter(TeamID == tid)
+      games_as_underdog <- nrow(hist)
+      wins_as_underdog <- if (games_as_underdog > 0) sum(hist$Won) else 0L
+      out_list[[length(out_list) + 1]] <- tibble(Season = s, TeamID = tid,
+        upset_win_pct = if (games_as_underdog > 0) wins_as_underdog / games_as_underdog else 0.5,
+        upset_wins = as.integer(wins_as_underdog),
+        upset_games = as.integer(games_as_underdog))
+    }
+  }
+  if (length(out_list) == 0) {
+    return(tibble(Season = integer(), TeamID = integer(),
+                  upset_win_pct = numeric(), upset_wins = integer(), upset_games = integer()))
+  }
+  bind_rows(out_list)
+}
+
 #' Compute teams that played in the First Four (DayNum 134-135)
 #' First Four teams have less rest before their R1 game.
 #' @param tourney_results Tournament results with DayNum
@@ -298,7 +461,8 @@ compute_points_stats <- function(regular_results) {
 build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                               head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
                               home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
-                              conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL) {
+                              conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
+                              tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   games_with_seeds <- tourney_results %>%
@@ -334,6 +498,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       recent_win_pct = recent_win_pct, recent_mov = recent_mov,
       conference_stats = conference_stats, quadrant_stats = quadrant_stats,
       first_four_stats = first_four_stats,
+      tourney_history_stats = tourney_history_stats, tourney_h2h = tourney_h2h,
+      upset_history = upset_history,
       round = row$round
     )
     rows[[i]] <- bind_cols(
@@ -346,6 +512,7 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
     select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
            recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
            sos_diff, rest_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
+           tourney_winpct_diff, deepest_run_diff, tourney_h2h_team_a_winpct, tourney_h2h_games, upset_winpct_diff,
            home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
            adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction,
            round_seed_interaction, seed_barthag_interaction, seed_recentmov_interaction)
@@ -369,7 +536,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                                      head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
                                      home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
-                                     conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL, round = 1L) {
+                                     conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
+                                     tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL, round = 1L) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   seed_a <- seeds %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
@@ -488,6 +656,40 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     first_four_rest_diff_val <- as.integer((if (length(ff_b) > 0 && !is.na(ff_b[1])) ff_b[1] else 0) - (if (length(ff_a) > 0 && !is.na(ff_a[1])) ff_a[1] else 0))
   }
 
+  # Historical tournament features (past years only, no leakage)
+  tourney_winpct_diff_val <- 0
+  deepest_run_diff_val <- 0L
+  tourney_h2h_winpct <- 0.5
+  tourney_h2h_games_val <- 0L
+  upset_winpct_diff_val <- 0
+  if (!is.null(tourney_history_stats) && nrow(tourney_history_stats) > 0) {
+    th_a <- tourney_history_stats %>% filter(Season == season, TeamID == team_a)
+    th_b <- tourney_history_stats %>% filter(Season == season, TeamID == team_b)
+    wp_a <- if (nrow(th_a) > 0) th_a$tourney_win_pct_5y[1] else 0.5
+    wp_b <- if (nrow(th_b) > 0) th_b$tourney_win_pct_5y[1] else 0.5
+    dr_a <- if (nrow(th_a) > 0) th_a$deepest_run_5y[1] else 0L
+    dr_b <- if (nrow(th_b) > 0) th_b$deepest_run_5y[1] else 0L
+    tourney_winpct_diff_val <- wp_a - wp_b
+    deepest_run_diff_val <- as.integer(dr_a - dr_b)
+  }
+  if (!is.null(tourney_h2h) && nrow(tourney_h2h) > 0) {
+    t1 <- pmin(team_a, team_b)
+    t2 <- pmax(team_a, team_b)
+    th2h <- tourney_h2h %>% filter(Season == season, Team1 == t1, Team2 == t2)
+    if (nrow(th2h) > 0 && th2h$tourney_h2h_games[1] > 0) {
+      tourney_h2h_games_val <- as.integer(th2h$tourney_h2h_games[1])
+      wins <- if (team_a == t1) th2h$tourney_h2h_team1_wins[1] else (th2h$tourney_h2h_games[1] - th2h$tourney_h2h_team1_wins[1])
+      tourney_h2h_winpct <- wins / th2h$tourney_h2h_games[1]
+    }
+  }
+  if (!is.null(upset_history) && nrow(upset_history) > 0) {
+    uh_a <- upset_history %>% filter(Season == season, TeamID == team_a)
+    uh_b <- upset_history %>% filter(Season == season, TeamID == team_b)
+    ua <- if (nrow(uh_a) > 0) uh_a$upset_win_pct[1] else 0.5
+    ub <- if (nrow(uh_b) > 0) uh_b$upset_win_pct[1] else 0.5
+    upset_winpct_diff_val <- ua - ub
+  }
+
   out <- tibble(
     round = round_num,
     seed_diff = seed_diff,
@@ -509,6 +711,11 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     quad1_winpct_diff = quad1_diff_val,
     quad12_winpct_diff = quad12_diff_val,
     first_four_rest_diff = first_four_rest_diff_val,
+    tourney_winpct_diff = tourney_winpct_diff_val,
+    deepest_run_diff = deepest_run_diff_val,
+    tourney_h2h_team_a_winpct = tourney_h2h_winpct,
+    tourney_h2h_games = tourney_h2h_games_val,
+    upset_winpct_diff = upset_winpct_diff_val,
     home_win_rate_diff = 0,
     away_win_rate_diff = 0,
     elo_diff = 0,
