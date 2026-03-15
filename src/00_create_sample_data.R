@@ -10,6 +10,7 @@ library(readr)
 library(dplyr)
 
 source(here("src", "config.R"))
+source(here("src", "utils", "season_dayzero.R"))
 if (!dir.exists(RAW_DIR)) dir.create(RAW_DIR, recursive = TRUE)
 
 # Minimal teams (64 teams x 5 years = 320 teams)
@@ -21,7 +22,12 @@ teams <- data.frame(
 write_csv(teams, file.path(RAW_DIR, "MTeams.csv"))
 
 # Seasons
-seasons <- data.frame(Season = 2020:2024, DayZero = "2020-11-25")
+seasons <- build_mseasons_with_dayzero(
+  seasons = 2020:2024,
+  schedules_dir = SCHEDULES_DIR,
+  existing_mseasons_path = file.path(RAW_DIR, "MSeasons.csv"),
+  include_existing_seasons = FALSE
+)
 write_csv(seasons, file.path(RAW_DIR, "MSeasons.csv"))
 
 # Tournament seeds (4 regions x 16 seeds = 64 teams per year)

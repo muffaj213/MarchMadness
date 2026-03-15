@@ -12,6 +12,7 @@ library(dplyr)
 
 source(here("src", "config.R"))
 source(here("src", "utils", "bracket_slots.R"))
+source(here("src", "utils", "season_dayzero.R"))
 OUT_DIR <- RAW_EXTENDED_DIR
 
 #' Parse Tournament Matchups into game results
@@ -97,11 +98,14 @@ main <- function() {
   message("Building MTeams...")
   teams <- build_teams(tm_path)
 
-  # MSeasons
-  seasons <- tourney_results %>%
-    distinct(Season) %>%
-    mutate(DayZero = "2020-11-25") %>%
-    arrange(Season)
+  # MSeasons: derive DayZero from schedule files when available,
+  # preserve existing values for uncovered seasons, otherwise fallback.
+  seasons <- build_mseasons_with_dayzero(
+    seasons = unique(tourney_results$Season),
+    schedules_dir = SCHEDULES_DIR,
+    existing_mseasons_path = file.path(OUT_DIR, "MSeasons.csv"),
+    include_existing_seasons = TRUE
+  )
 
   # MNCAATourneySlots - always use correct NCAA bracket (R2 = 1v8, 2v7, 3v6, 4v5)
   # Never use raw/Kaggle MNCAATourneySlots which has wrong R2 pairings (1v2, 3v4)
