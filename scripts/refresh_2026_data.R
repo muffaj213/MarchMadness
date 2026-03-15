@@ -16,6 +16,8 @@ main <- function() {
   message("=== Refreshing data for ", year, " prediction ===\n")
 
   # Step 1: Fetch schedule via cbbdata
+  schedule_path <- file.path(SCHEDULES_DIR, "2025-26_schedule.csv")
+
   if (requireNamespace("cbbdata", quietly = TRUE)) {
     message("1. Fetching schedule via cbbdata...")
     exit <- system2("Rscript", c(
@@ -30,9 +32,20 @@ main <- function() {
     message("   Or: devtools::install_github('andreweatherman/cbbdata')")
   }
 
+  # Step 1b: Fallback to hoopR when cbbdata returns no 2026 rows
+  if (!file.exists(schedule_path) && file.exists(here::here("scripts", "fetch_schedule_hoopr.R"))) {
+    message("1b. cbbdata missing/empty; fetching schedule via hoopR...")
+    exit <- system2("Rscript", c(
+      here::here("scripts", "fetch_schedule_hoopr.R"),
+      as.character(year)
+    ))
+    if (exit != 0) {
+      message("  hoopR fetch failed. Add data/raw_schedules/2025-26_schedule.csv manually.")
+    }
+  }
+
   # Step 2: Convert schedules to MRegularSeasonCompactResults
   message("\n2. Converting schedules to MRegularSeasonCompactResults...")
-  schedule_path <- file.path(SCHEDULES_DIR, "2025-26_schedule.csv")
   if (file.exists(schedule_path)) {
     exit <- system2("Rscript", here::here("src", "01c_convert_schedules_to_regular.R"))
     if (exit == 0) message("  Done.") else message("  Conversion failed.")

@@ -58,7 +58,7 @@ if (file.exists(here("scripts", "fetch_schedule_torvik_github.R"))) {
       error = function(e) message("  ", yr, " skipped: ", conditionMessage(e))
     )
   }
-  # If GitHub lacked 2025/2026, try cbbdata API (then bart_game_box)
+  # If GitHub lacked 2025/2026, try cbbdata API, then hoopR API (then bart_game_box for 2025)
   for (yr in c(2025L, 2026L)) {
     sched_label <- paste0(yr - 1L, "-", sprintf("%02d", yr %% 100))
     sched_file <- file.path(SCHEDULES_DIR, paste0(sched_label, "_schedule.csv"))
@@ -71,6 +71,17 @@ if (file.exists(here("scripts", "fetch_schedule_torvik_github.R"))) {
           source(here("scripts", "fetch_schedule_cbbdata.R"), local = new.env())
         },
         error = function(e) message("  cbbdata ", yr, " skipped: ", conditionMessage(e))
+      )
+    }
+    if (!file.exists(sched_file) && file.exists(here("scripts", "fetch_schedule_hoopr.R"))) {
+      tryCatch(
+        {
+          old <- Sys.getenv("HOOPR_FETCH_YEAR")
+          Sys.setenv(HOOPR_FETCH_YEAR = as.character(yr))
+          on.exit(Sys.setenv(HOOPR_FETCH_YEAR = old), add = TRUE)
+          source(here("scripts", "fetch_schedule_hoopr.R"), local = new.env())
+        },
+        error = function(e) message("  hoopR ", yr, " skipped: ", conditionMessage(e))
       )
     }
   }
