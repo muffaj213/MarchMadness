@@ -322,7 +322,69 @@ load_for_prediction <- function(seeds_file = NULL) {
 # Manual seeds override: use this file for 2025 predictions (correct bracket from Selection Sunday)
 SEEDS_2025_PATH <- file.path(BRACKET_DIR, "seeds_68team_2025.csv")
 
-main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE) {
+#' Run Monte Carlo bracket simulation and save slot/champion odds
+#' @param n_sims Number of bracket simulations
+#' @param seed RNG seed for reproducibility
+run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
+                            n_sims = 1000L, seed = 2026L, use_projected_output = FALSE) {
+  source(here("src", "utils", "bracket_logic.R"), local = TRUE)
+  set.seed(seed)
+  sims <- vector("list", n_sims)
+  champs <- integer(n_sims)
+  for (i in seq_len(n_sims)) {
+    sim <- simulate_bracket(
+      season = season,
+      slots_df = slots_season,
+      seeds_df = seeds_season,
+      model = data$model,
+      win_pct = data$win_pct,
+      points_stats = data$points_stats,
+      kenpom_stats = data$kenpom_stats,
+      late_win_pct = data$late_win_pct,
+      recent_win_pct = data$recent_win_pct,
+      recent_mov = data$recent_mov,
+      home_away_stats = data$home_away_stats,
+      resume_stats = data$resume_stats,
+      head_to_head = data$head_to_head,
+      sos_stats = data$sos_stats,
+      rest_stats = data$rest_stats,
+      conference_stats = data$conference_stats,
+      quadrant_stats = data$quadrant_stats,
+      first_four_stats = data$first_four_stats,
+      tourney_history_stats = data$tourney_history_stats,
+      tourney_h2h = data$tourney_h2h,
+      upset_history = data$upset_history,
+      deterministic = FALSE
+    )
+    sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
+    champs[[i]] <- sim$champion
+  }
+  sim_games <- bind_rows(sims)
+  slot_odds <- sim_games %>%
+    count(slot, round, team_id = winner, name = "wins") %>%
+    mutate(
+      win_rate = wins / n_sims,
+      team_name = lookup[as.character(team_id)]
+    ) %>%
+    arrange(round, slot, desc(win_rate))
+  champion_odds <- tibble(team_id = champs) %>%
+    count(team_id, name = "titles") %>%
+    mutate(
+      title_rate = titles / n_sims,
+      team_name = lookup[as.character(team_id)]
+    ) %>%
+    arrange(desc(title_rate), desc(titles))
+
+  mc_base <- if (use_projected_output) paste0("bracket_prediction_projected_monte_carlo_", season) else paste0("bracket_prediction_monte_carlo_", season)
+  slot_file <- file.path(OUTPUT_DIR, paste0(mc_base, ".csv"))
+  champ_file <- file.path(OUTPUT_DIR, paste0("champion_monte_carlo_", season, ".csv"))
+  write_csv(slot_odds, slot_file)
+  write_csv(champion_odds, champ_file)
+  list(slot_odds_file = slot_file, champion_odds_file = champ_file, champion_odds = champion_odds)
+}
+
+main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE,
+                 run_monte_carlo_output = TRUE, monte_carlo_sims = 1000L, monte_carlo_seed = 2026L) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
   # Use manual 2025 seeds when predicting 2025 and no seeds_file specified
@@ -458,11 +520,33 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     paste("TeamID:", result$champion)
   ), champ_file)
 
+  mc_out <- NULL
+  if (isTRUE(run_monte_carlo_output) && monte_carlo_sims > 0) {
+    message("Running Monte Carlo simulations (n=", monte_carlo_sims, ", seed=", monte_carlo_seed, ")...")
+    mc_out <- run_monte_carlo(
+      data = data,
+      season = season,
+      seeds_season = seeds_season,
+      slots_season = slots_season,
+      lookup = lookup,
+      n_sims = as.integer(monte_carlo_sims),
+      seed = as.integer(monte_carlo_seed),
+      use_projected_output = use_projected_output
+    )
+    top_champ <- mc_out$champion_odds %>% slice(1)
+    message("Monte Carlo slot odds saved to ", mc_out$slot_odds_file)
+    message("Monte Carlo champion odds saved to ", mc_out$champion_odds_file)
+    if (nrow(top_champ) > 0) {
+      message("Monte Carlo top champion: ", top_champ$team_name[1], " (", round(100 * top_champ$title_rate[1], 1), "%)")
+    }
+  }
+
   invisible(list(
     champion = result$champion,
     champion_name = champ_name,
     game_results = game_results,
-    season = season
+    season = season,
+    monte_carlo = mc_out
   ))
 }
 

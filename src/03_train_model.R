@@ -20,25 +20,23 @@ CONFIG_DIR <- here("config")
 # - Stricter CV: use last 2-3 years only for validation (reduces overfitting to distant past)
 # - Holdout: multiple years for mean +/- SD (reduces variance from single year)
 # For production (e.g. predict 2026): train through 2025 for best generalization.
-# Holdout years (2022-2024) used for model selection; 2025 in training adds 63 examples.
-TRAIN_SEASONS_END <- 2025L  # Last season for training (includes 2025 tournament results)
-TEST_SEASONS <- c(2022L, 2023L, 2024L)  # Holdout years for evaluation (mean +/- SD)
+# Holdout years are reserved for out-of-sample evaluation/model selection only.
+TRAIN_SEASONS_END <- 2025L  # Last season for final production refit
+TEST_SEASONS <- c(2022L, 2023L, 2024L)  # True holdout years (mean +/- SD)
 TUNE_VALIDATION_FIRST_YEAR <- 2020L  # Stricter: validate on 2020+ only (last 5 years)
 TUNE_VALIDATION_LAST_N_YEARS <- 5L   # Max validation folds (recent years only)
 WEIGHT_TUNE_YEARS <- c(2019L, 2020L, 2021L)  # Multiple years for weight tuning (avoids overfitting to single year)
 ENTROPY_REGULARIZATION <- 0.03  # Penalize weight concentration; higher = more uniform weights
-SKIP_ENSEMBLE_CALIBRATION <- TRUE  # Platt scaling overfits on ~120 games; skip until we have more data
+SKIP_ENSEMBLE_CALIBRATION <- FALSE  # Re-enabled now that holdout years are leakage-free
 MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 
-BASE_FEATURE_COLS <- c("seed_diff", "seed_diff_sq", "seed_sum", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
-                       "is_upset_matchup", "upset_seed_gap", "seed_winpct_interaction", "pf_diff", "round",
-                       "h2h_team_a_winpct", "h2h_games", "sos_diff", "rest_diff",
+BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
+                       "pf_diff", "round", "sos_diff", "rest_diff",
                        "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff",
                        "tourney_winpct_diff", "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games", "upset_winpct_diff")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
-                         "adjem_seed_interaction", "seed_latewinpct_interaction", "round_seed_interaction",
-                         "seed_barthag_interaction", "seed_recentmov_interaction")
+                         "adjem_seed_interaction")
 
 # -----------------------------------------------------------------------------
 # BASELINE: Regularized to reduce overfitting (~63 games/year)
@@ -68,9 +66,9 @@ BASELINE_SPECS <- list(
   ),
   rand_forest = list(
     trees = 200,
-    min_n = 15,
+    min_n = 30,
     engine = "ranger",
-    note = "Regularized: fewer trees, higher min_n"
+    note = "Regularized: fewer trees, much higher min_n"
   )
 )
 
@@ -313,10 +311,10 @@ run_tuned <- function(train_data, matchup_data, test_years) {
         )
       ),
       rand_forest = dplyr::bind_rows(
-        tibble(trees = 200, min_n = 15, mtry = 4),  # regularized baseline
+        tibble(trees = 200, min_n = 30, mtry = 4),  # regularized baseline
         grid_space_filling(
           trees(range = c(100, 350)),
-          min_n(range = c(10, 25)),
+          min_n(range = c(20, 40)),
           mtry(range = c(2, 6)),
           size = 11
         )
@@ -656,8 +654,12 @@ main <- function() {
   }
   if (nrow(matchup_data) < 100) stop("Insufficient training data.")
 
-  train_data <- matchup_data %>% filter(Season <= TRAIN_SEASONS_END)
+  test_years <- TEST_SEASONS
+  selection_end <- as.integer(min(test_years) - 1L)
+  train_data <- matchup_data %>% filter(Season <= selection_end)
+  if (nrow(train_data) == 0) train_data <- matchup_data %>% filter(Season < min(test_years))
   if (nrow(train_data) == 0) train_data <- matchup_data %>% filter(Season < max(Season))
+  full_train_data <- matchup_data %>% filter(Season <= TRAIN_SEASONS_END)
   n_2025 <- sum(matchup_data$Season == 2025L, na.rm = TRUE)
   if (TRAIN_SEASONS_END >= 2025L && n_2025 == 0) {
     message("NOTE: No 2025 tournament results in matchup_data. To include 2025 in training, ",
@@ -665,7 +667,9 @@ main <- function() {
   } else if (n_2025 > 0) {
     message("Training includes ", n_2025, " games from 2025 tournament.")
   }
-  test_years <- TEST_SEASONS
+  message("Model-selection train seasons: <= ", selection_end,
+          " | Holdout seasons: ", paste(test_years, collapse = ", "),
+          " | Final refit seasons: <= ", TRAIN_SEASONS_END)
 
   # Ensure baseline config exists
   save_baseline_config()
@@ -696,7 +700,7 @@ main <- function() {
   message("\n--- Baseline vs Tuned vs Ensemble Comparison ---")
   print(both)
 
-  # Save best model (ensemble preferred if best; else tuned; else baseline)
+  # Select best model using strict holdout metrics
   all_comp <- bind_rows(
     baseline_comp %>% mutate(Source = "baseline"),
     tuned_comp %>% mutate(Source = "tuned"),
@@ -706,19 +710,29 @@ main <- function() {
   best_type <- best_row$Model[1]
   best_source <- best_row$Source[1]
 
+  # Refit chosen model on all available seasons through TRAIN_SEASONS_END for production inference.
+  full_train_fct <- full_train_data %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
   if (best_source == "ensemble" && !is.null(ensemble_out)) {
+    # Keep calibrated/optimized ensemble from strict model-selection stage.
+    # (Weights are selected leakage-free; final refit of all submodels can be added later if needed.)
     best_model <- ensemble_out$ensemble
     saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
-    message("\nBest model: ensemble -> saved as bracket_model.rds")
+    message("\nBest model: ensemble (selection-stage calibrated) -> saved as bracket_model.rds")
   } else {
-    model_file <- if (best_source == "tuned") {
-      file.path(MODELS_DIR, paste0("bracket_model_", best_type, ".rds"))
+    if (best_source == "tuned") {
+      wf <- build_tuned_workflow(best_type, full_train_fct)
+      best_params <- tuned_out$tuned_params[[best_type]]
+      if (is.null(best_params)) stop("Missing tuned parameters for best model: ", best_type)
+      final_wf <- finalize_workflow(wf, best_params)
+      best_model <- fit(final_wf, data = full_train_fct)
     } else {
-      file.path(MODELS_DIR, paste0("bracket_model_", best_type, "_baseline.rds"))
+      wf <- build_baseline_workflow(best_type, full_train_fct)
+      best_model <- fit(wf, data = full_train_fct)
     }
-    best_model <- readRDS(model_file)
     saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
-    message("\nBest model: ", best_type, " (", best_source, ") -> saved as bracket_model.rds")
+    message("\nBest model: ", best_type, " (", best_source, ") refit on seasons <= ", TRAIN_SEASONS_END,
+            " -> saved as bracket_model.rds")
   }
 
   if (best_source == "glm" && inherits(best_model, "workflow")) {

@@ -12,5 +12,5 @@ baseline,xgboost,tree_depth,3
 baseline,xgboost,engine,xgboost
 baseline,xgboost,stop_iter,10
 baseline,rand_forest,trees,200
-baseline,rand_forest,min_n,15
+baseline,rand_forest,min_n,30
 baseline,rand_forest,engine,ranger
