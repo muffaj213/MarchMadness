@@ -38,7 +38,10 @@ build_global_name_to_id <- function(teams_df) {
     TeamID = teams$TeamID,
     stringsAsFactors = FALSE
   )
-  lookup %>% group_by(name_lower) %>% slice(1) %>% ungroup()
+  lookup %>%
+    group_by(name_lower) %>%
+    slice_max(TeamID, n = 1, with_ties = FALSE) %>%
+    ungroup()
 }
 
 #' Parse schedule file to extract Season and game rows

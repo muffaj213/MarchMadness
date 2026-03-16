@@ -81,6 +81,7 @@ load_for_prediction <- function(seeds_file = NULL) {
   }
 
   model <- readRDS(model_path)
+  source(here("src", "utils", "kenpom_utils.R"), local = TRUE)
 
   win_pct <- read_csv(file.path(PROC_DIR, "win_pct.csv"), show_col_types = FALSE)
   points_stats <- read_csv(file.path(PROC_DIR, "points_stats.csv"), show_col_types = FALSE)
@@ -128,6 +129,112 @@ load_for_prediction <- function(seeds_file = NULL) {
   tourney_history_stats <- read_optional_csv(file.path(PROC_DIR, "tourney_history_stats.csv"))
   tourney_h2h <- read_optional_csv(file.path(PROC_DIR, "tourney_h2h.csv"))
   upset_history <- read_optional_csv(file.path(PROC_DIR, "upset_history.csv"))
+
+  # For future/manual seed seasons (e.g. 2026), re-load auxiliary team-level features
+  # directly from raw sources when processed files do not include those seasons.
+  augment_team_feature <- function(existing_df, fresh_df, label) {
+    if (is.null(fresh_df) || nrow(fresh_df) == 0) return(existing_df)
+    if (!all(c("Season", "TeamID") %in% names(fresh_df))) return(existing_df)
+    have <- if (!is.null(existing_df) && nrow(existing_df) > 0 &&
+                  all(c("Season", "TeamID") %in% names(existing_df))) {
+      unique(existing_df$Season)
+    } else integer()
+    need <- setdiff(seeds_seasons, have)
+    if (length(need) == 0) return(existing_df)
+    to_add <- fresh_df %>% filter(Season %in% need)
+    if (nrow(to_add) == 0) return(existing_df)
+    out <- if (is.null(existing_df) || nrow(existing_df) == 0) {
+      to_add
+    } else {
+      bind_rows(existing_df, to_add) %>% distinct(Season, TeamID, .keep_all = TRUE)
+    }
+    message("Augmented ", label, " for season(s) ", paste(sort(unique(to_add$Season)), collapse = ", "),
+            " (", nrow(to_add), " rows)")
+    out
+  }
+
+  ensure_seed_defaults <- function(df, defaults, label) {
+    keys <- seeds %>% distinct(Season, TeamID)
+    if (is.null(df) || nrow(df) == 0) {
+      df <- keys
+      added <- nrow(keys)
+    } else {
+      if (!all(c("Season", "TeamID") %in% names(df))) return(df)
+      missing_keys <- keys %>% anti_join(df %>% select(Season, TeamID) %>% distinct(),
+                                         by = c("Season", "TeamID"))
+      added <- nrow(missing_keys)
+      if (added > 0) df <- bind_rows(df, missing_keys)
+    }
+    for (nm in names(defaults)) {
+      def <- defaults[[nm]]
+      if (!nm %in% names(df)) {
+        df[[nm]] <- def
+      } else {
+        df[[nm]] <- ifelse(is.na(df[[nm]]), def, df[[nm]])
+      }
+    }
+    if (added > 0) {
+      message("Filled ", label, " defaults for ", added, " seed-team rows")
+    }
+    df
+  }
+
+  lookup <- build_season_team_lookup(seeds, teams)
+  home_away_raw <- load_home_away_win_rates(lookup = lookup)
+  resume_raw <- load_resume_stats(lookup = lookup)
+  bt_resume_raw <- load_barttorvik_resume_metrics(lookup = lookup)
+  if (nrow(bt_resume_raw) > 0) {
+    resume_raw <- if (nrow(resume_raw) > 0) {
+      resume_raw %>% full_join(bt_resume_raw, by = c("Season", "TeamID"))
+    } else {
+      bt_resume_raw
+    }
+  }
+  conference_raw <- load_conference_strength(lookup = lookup)
+  quadrant_raw <- load_quadrant_stats(lookup = lookup)
+
+  home_away_stats <- augment_team_feature(home_away_stats, home_away_raw, "home/away stats")
+  resume_stats <- augment_team_feature(resume_stats, resume_raw, "resume stats")
+  conference_stats <- augment_team_feature(conference_stats, conference_raw, "conference stats")
+  quadrant_stats <- augment_team_feature(quadrant_stats, quadrant_raw, "quadrant stats")
+
+  # First Four status can be inferred directly from a/b split seeds for prediction seasons.
+  have_ff <- if (!is.null(first_four_stats) && nrow(first_four_stats) > 0 &&
+                   "Season" %in% names(first_four_stats)) unique(first_four_stats$Season) else integer()
+  need_ff <- setdiff(seeds_seasons, have_ff)
+  if (length(need_ff) > 0) {
+    ff_from_seeds <- seeds %>%
+      filter(Season %in% need_ff) %>%
+      distinct(Season, TeamID, Seed) %>%
+      mutate(played_first_four = as.integer(grepl("[ab]$", Seed))) %>%
+      select(Season, TeamID, played_first_four)
+    first_four_stats <- if (is.null(first_four_stats) || nrow(first_four_stats) == 0) {
+      ff_from_seeds
+    } else {
+      bind_rows(first_four_stats, ff_from_seeds) %>% distinct(Season, TeamID, .keep_all = TRUE)
+    }
+    message("Augmented first_four stats from seeds for season(s) ", paste(sort(need_ff), collapse = ", "),
+            " (", nrow(ff_from_seeds), " rows)")
+  }
+
+  # Ensure every seeded team has explicit rows in team-level feature tables.
+  # This does not change model behavior vs current fallback defaults; it prevents
+  # silent sparsity and keeps defaults-audit focused on true data gaps.
+  win_pct <- ensure_seed_defaults(win_pct, list(WinPct = 0.5, Wins = 0L, Losses = 0L, Games = 0L), "win_pct")
+  points_stats <- ensure_seed_defaults(points_stats, list(PF_per_game = 70, PA_per_game = 70), "points_stats")
+  kenpom_stats <- ensure_seed_defaults(kenpom_stats, list(
+    adj_em = 0, adj_o = 100, adj_d = 100, adj_t = 68, luck = 0, win_pct = 0.5, Wins = 0L, Losses = 0L, Games = 0L
+  ), "kenpom")
+  late_win_pct <- ensure_seed_defaults(late_win_pct, list(LateWinPct = 0.5, LateWins = 0L, LateLosses = 0L, LateGames = 0L), "late_win_pct")
+  recent_win_pct <- ensure_seed_defaults(recent_win_pct, list(RecentWinPct = 0.5, RecentWins = 0L, RecentLosses = 0L, RecentGames = 0L), "recent_win_pct")
+  recent_mov <- ensure_seed_defaults(recent_mov, list(RecentMOV = 0), "recent_mov")
+  sos_stats <- ensure_seed_defaults(sos_stats, list(sos = 0.5), "sos")
+  rest_stats <- ensure_seed_defaults(rest_stats, list(days_rest = 0L), "rest")
+  conference_stats <- ensure_seed_defaults(conference_stats, list(conf_em = 0), "conference")
+  quadrant_stats <- ensure_seed_defaults(quadrant_stats, list(quad1_winpct = 0.5, quad12_winpct = 0.5), "quadrant")
+  home_away_stats <- ensure_seed_defaults(home_away_stats, list(home_win_rate = 0.5, away_win_rate = 0.5), "home_away")
+  resume_stats <- ensure_seed_defaults(resume_stats, list(elo = 0, net = 200, wab = 200, barthag = 0.5, elite_sos = 0), "resume")
+  first_four_stats <- ensure_seed_defaults(first_four_stats, list(played_first_four = 0L), "first_four")
 
   # Compute historical tournament features for prediction seasons not in saved data (e.g. 2026)
   tourney_results_path <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
@@ -274,6 +381,28 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
   if (is.na(team_name_col)) team_name_col <- names(data$teams)[2]
 
   lookup <- setNames(data$teams[[team_name_col]], data$teams$TeamID)
+  # Fallback names from bracket reference (useful when manual seed TeamIDs are not
+  # present in processed teams.csv but are valid for a prediction season).
+  ref_path <- file.path(BRACKET_DIR, paste0("bracket_reference_", season, ".csv"))
+  if (file.exists(ref_path) && all(c("Seed", "TeamName") %in% names(read_csv(ref_path, n_max = 1, show_col_types = FALSE)))) {
+    ref <- read_csv(ref_path, show_col_types = FALSE) %>%
+      select(Seed, TeamName) %>%
+      distinct(Seed, .keep_all = TRUE)
+    ref_lookup <- seeds_season %>%
+      select(TeamID, Seed) %>%
+      left_join(ref, by = "Seed") %>%
+      filter(!is.na(TeamName)) %>%
+      mutate(TeamID_chr = as.character(TeamID))
+    if (nrow(ref_lookup) > 0) {
+      needs <- is.na(lookup[ref_lookup$TeamID_chr])
+      if (any(needs)) {
+        fill_ids <- ref_lookup$TeamID_chr[needs]
+        fill_names <- ref_lookup$TeamName[needs]
+        lookup[fill_ids] <- fill_names
+        message("Filled ", sum(needs), " team names from ", basename(ref_path))
+      }
+    }
+  }
 
   game_results <- result$game_results %>%
     mutate(
