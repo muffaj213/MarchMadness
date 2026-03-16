@@ -1,0 +1,69 @@
+Seed,TeamName,Record,Region
+W01,Michigan,31-3,Midwest
+W02,Iowa St.,27-7,Midwest
+W03,Virginia,29-5,Midwest
+W04,Alabama,23-9,Midwest
+W05,Texas Tech,22-10,Midwest
+W06,Tennessee,22-11,Midwest
+W07,Kentucky,21-13,Midwest
+W08,Georgia,22-10,Midwest
+W09,Saint Louis,28-5,Midwest
+W10,Santa Clara,26-8,Midwest
+W11a,SMU,20-13,Midwest
+W11b,Miami (Ohio),31-1,Midwest
+W12,Akron,29-5,Midwest
+W13,Hofstra,24-10,Midwest
+W14,Wright St.,23-11,Midwest
+W15,Tennessee St.,23-9,Midwest
+W16a,Howard,23-10,Midwest
+W16b,UMBC,24-8,Midwest
+X01,Arizona,32-2,West
+X02,Purdue,27-8,West
+X03,Gonzaga,30-3,West
+X04,Arkansas,26-8,West
+X05,Wisconsin,24-10,West
+X06,BYU,23-11,West
+X07,Miami (FL),25-8,West
+X08,Villanova,24-8,West
+X09,Utah St.,28-6,West
+X10,Missouri,20-12,West
+X11a,NC State,20-13,West
+X11b,Texas,18-14,West
+X12,High Point,30-4,West
+X13,Hawaii,24-8,West
+X14,Kennesaw St.,21-13,West
+X15,Queens (N.C.),21-13,West
+X16,Long Island,24-10,West
+Y01,Duke,32-2,East
+Y02,UConn,29-5,East
+Y03,Michigan St.,25-7,East
+Y04,Kansas,23-10,East
+Y05,St. John's,28-6,East
+Y06,Louisville,23-10,East
+Y07,UCLA,23-11,East
+Y08,Ohio St.,21-12,East
+Y09,TCU,22-11,East
+Y10,UCF,21-11,East
+Y11,South Florida,25-8,East
+Y12,Northern Iowa,23-12,East
+Y13,Cal Baptist,25-8,East
+Y14,North Dakota St.,27-7,East
+Y15,Furman,22-12,East
+Y16,Siena,23-11,East
+Z01,Florida,26-7,South
+Z02,Houston,28-6,South
+Z03,Illinois,24-8,South
+Z04,Nebraska,26-6,South
+Z05,Vanderbilt,26-8,South
+Z06,North Carolina,24-8,South
+Z07,Saint Mary's,27-5,South
+Z08,Clemson,24-10,South
+Z09,Iowa,21-12,South
+Z10,Texas A&M,21-11,South
+Z11,VCU,27-7,South
+Z12,McNeese,28-5,South
+Z13,Troy,22-11,South
+Z14,Penn,18-11,South
+Z15,Idaho,21-14,South
+Z16a,Lehigh,18-16,South
+Z16b,Prairie View A&M,18-17,South

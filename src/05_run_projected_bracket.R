@@ -14,7 +14,7 @@ library(dplyr)
 source(here("src", "config.R"))
 
 # Configurable year for projected bracket
-PROJECTED_YEAR <- 2025L
+PROJECTED_YEAR <- 2026L
 
 main <- function(year = PROJECTED_YEAR) {
   excel_path <- file.path(BRACKET_DIR, paste0("bracket_projection_", year, ".xlsx"))

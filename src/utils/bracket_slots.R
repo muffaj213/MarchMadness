@@ -20,9 +20,9 @@ FIRST_FOUR_YEAR <- 2011L
 
 #' Standard 68-team First Four play-in slots (template when raw_historical unavailable)
 FIRST_FOUR_TEMPLATE <- tibble(
-  Slot = c("W16", "W11", "Y11", "Z16"),
-  Strong = c("W16a", "W11a", "Y11a", "Z16a"),
-  Weak = c("W16b", "W11b", "Y11b", "Z16b")
+  Slot = c("W16", "W11", "X11", "Z16"),
+  Strong = c("W16a", "W11a", "X11a", "Z16a"),
+  Weak = c("W16b", "W11b", "X11b", "Z16b")
 )
 
 #' Correct 64-team bracket (R1-R6) with NCAA pairings: R2 = 1v8, 2v7, 3v6, 4v5 per region.

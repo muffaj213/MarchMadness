@@ -14,7 +14,7 @@ source(here("src", "config.R"))
 source(here("src", "utils", "feature_engineering.R"))  # compute_matchup_features for simulate_bracket
 
 # Which season to predict (use seeds from this year)
-PREDICT_SEASON <- 2024L
+PREDICT_SEASON <- 2026L
 
 #' Read CSV if file exists, else NULL
 read_optional_csv <- function(path) {
@@ -237,12 +237,9 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     seeds_season <- data$seeds %>% filter(Season == season)
   }
 
-  # Slots may be season-independent (same bracket structure each year)
-  slots_season <- data$slots
-  if ("Season" %in% names(data$slots)) {
-    slots_filtered <- data$slots %>% filter(Season == season)
-    if (nrow(slots_filtered) > 0) slots_season <- slots_filtered
-  }
+  # Build season-specific bracket slots (supports 68-team First Four templates)
+  source(here('src', 'utils', 'bracket_slots.R'), local = TRUE)
+  slots_season <- get_slots_for_season(season, data$slots)
 
   message("Simulating bracket for season ", season, "...")
   source(here("src", "utils", "bracket_logic.R"), local = TRUE)
