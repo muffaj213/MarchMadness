@@ -64,7 +64,8 @@ normalize_team_name <- function(x) {
     "Kent State" = "Kent St.",
     "Utah State" = "Utah St.",
     "North Dakota State" = "North Dakota St.",
-    "South Dakota State" = "South Dakota St."
+    "South Dakota State" = "South Dakota St.",
+    "Queens" = "Queens (N.C.)"
   )
   for (i in seq_along(substitutions)) {
     x[x == names(substitutions)[i]] <- substitutions[i]
@@ -259,30 +260,88 @@ load_kenpom_stats <- function(seeds, teams, kenpom_dir = NULL, barttorvik_path =
     arrange(Season, TeamID)
 }
 
-#' Load home/away win rates from College basketball 2012-24.csv (atoziye)
-#' Expected columns: Year, Team, Home win rate, Away win rate
+#' Load home/away win rates.
+#' Primary source: data/raw_atoziye/College basketball 2012-24.csv
+#' Fallback source: data/raw_nishaa/Barttorvik Home.csv + Barttorvik Away.csv
 #' @return Tibble with Season, TeamID, home_win_rate, away_win_rate
 load_home_away_win_rates <- function(path = NULL, lookup) {
   if (is.null(path)) path <- file.path(RAW_ATOZIYE_DIR, "College basketball 2012-24.csv")
-  if (!file.exists(path)) return(tibble())
-  df <- read_csv(path, show_col_types = FALSE)
-  if (nrow(df) == 0) return(tibble())
-  if ("Year" %in% names(df)) df <- df %>% rename(Season = Year)
-  if ("YEAR" %in% names(df) && !"Season" %in% names(df)) df <- df %>% rename(Season = YEAR)
-  if ("TEAM" %in% names(df) && !"Team" %in% names(df)) df <- df %>% rename(Team = TEAM)
-  if (!"Team" %in% names(df)) return(tibble())
-  hr <- names(df)[grep("Home.*win|home.*win", names(df), ignore.case = TRUE)][1]
-  ar <- names(df)[grep("Away.*win|away.*win", names(df), ignore.case = TRUE)][1]
-  if (is.na(hr) || is.na(ar)) return(tibble())
-  df$TeamID <- map_kenpom_to_teamids(df, lookup)
-  df %>%
-    filter(!is.na(TeamID)) %>%
-    mutate(
-      home_win_rate = suppressWarnings(as.numeric(!!sym(hr))),
-      away_win_rate = suppressWarnings(as.numeric(!!sym(ar)))
-    ) %>%
+  out <- tibble(Season = integer(), TeamID = integer(), home_win_rate = numeric(), away_win_rate = numeric())
+  if (file.exists(path)) {
+    df <- read_csv(path, show_col_types = FALSE)
+    if (nrow(df) > 0) {
+      if ("Year" %in% names(df)) df <- df %>% rename(Season = Year)
+      if ("YEAR" %in% names(df) && !"Season" %in% names(df)) df <- df %>% rename(Season = YEAR)
+      if ("TEAM" %in% names(df) && !"Team" %in% names(df)) df <- df %>% rename(Team = TEAM)
+      if ("Team" %in% names(df)) {
+        hr <- names(df)[grep("Home.*win|home.*win", names(df), ignore.case = TRUE)][1]
+        ar <- names(df)[grep("Away.*win|away.*win", names(df), ignore.case = TRUE)][1]
+        if (!is.na(hr) && !is.na(ar)) {
+          df$TeamID <- map_kenpom_to_teamids(df, lookup)
+          out <- df %>%
+            filter(!is.na(TeamID)) %>%
+            mutate(
+              home_win_rate = suppressWarnings(as.numeric(.data[[hr]])),
+              away_win_rate = suppressWarnings(as.numeric(.data[[ar]]))
+            ) %>%
+            filter(!is.na(home_win_rate) | !is.na(away_win_rate)) %>%
+            select(Season, TeamID, home_win_rate, away_win_rate) %>%
+            distinct(Season, TeamID, .keep_all = TRUE)
+        }
+      }
+    }
+  }
+
+  # Fill missing seasons/teams from Barttorvik split files (contains current seasons).
+  bt_home_path <- file.path(NISHAA_DIR, "Barttorvik Home.csv")
+  bt_away_path <- file.path(NISHAA_DIR, "Barttorvik Away.csv")
+  if (file.exists(bt_home_path) && file.exists(bt_away_path)) {
+    bt_home <- read_csv(bt_home_path, show_col_types = FALSE)
+    bt_away <- read_csv(bt_away_path, show_col_types = FALSE)
+    if (nrow(bt_home) > 0 && nrow(bt_away) > 0 && all(c("YEAR", "TEAM", "W", "L") %in% names(bt_home)) &&
+        all(c("YEAR", "TEAM", "W", "L") %in% names(bt_away))) {
+      home_rates <- bt_home %>%
+        transmute(
+          Season = as.integer(YEAR),
+          Team = TEAM,
+          home_w = suppressWarnings(as.numeric(W)),
+          home_l = suppressWarnings(as.numeric(L)),
+          home_win_rate = if_else(home_w + home_l > 0, home_w / (home_w + home_l), 0.5)
+        )
+      away_rates <- bt_away %>%
+        transmute(
+          Season = as.integer(YEAR),
+          Team = TEAM,
+          away_w = suppressWarnings(as.numeric(W)),
+          away_l = suppressWarnings(as.numeric(L)),
+          away_win_rate = if_else(away_w + away_l > 0, away_w / (away_w + away_l), 0.5)
+        )
+      bt <- home_rates %>%
+        inner_join(away_rates %>% select(Season, Team, away_win_rate), by = c("Season", "Team"))
+      bt$TeamID <- map_kenpom_to_teamids(bt, lookup)
+      bt <- bt %>%
+        filter(!is.na(TeamID)) %>%
+        select(Season, TeamID, home_win_rate, away_win_rate) %>%
+        distinct(Season, TeamID, .keep_all = TRUE)
+
+      if (nrow(out) == 0) {
+        out <- bt
+      } else {
+        out <- out %>%
+          full_join(bt, by = c("Season", "TeamID"), suffix = c("_base", "_bt")) %>%
+          transmute(
+            Season,
+            TeamID,
+            home_win_rate = coalesce(home_win_rate_base, home_win_rate_bt),
+            away_win_rate = coalesce(away_win_rate_base, away_win_rate_bt)
+          )
+      }
+    }
+  }
+
+  out %>%
     filter(!is.na(home_win_rate) | !is.na(away_win_rate)) %>%
-    select(Season, TeamID, home_win_rate, away_win_rate)
+    distinct(Season, TeamID, .keep_all = TRUE)
 }
 
 #' Load NET, ELO, WAB from Resumes.csv and Teamsheet Ranks.csv (nishaa)
