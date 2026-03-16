@@ -407,22 +407,9 @@ load_resume_stats <- function(resumes_path = NULL, teamsheet_path = NULL, lookup
   out
 }
 
-#' Load team-conference mapping and conference strength (BADJ EM)
-#' Uses KenPom Conference and raw_nishaa Conference Stats.csv
-#' @return Tibble Season, TeamID, conf_em (conference strength, higher = stronger conf)
-load_conference_strength <- function(lookup, conf_stats_path = NULL) {
-  if (is.null(conf_stats_path)) conf_stats_path <- file.path(NISHAA_DIR, "Conference Stats.csv")
-  if (!file.exists(conf_stats_path)) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
-  conf <- read_csv(conf_stats_path, show_col_types = FALSE)
-  if (nrow(conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
-  em_col <- names(conf)[grepl("BADJ.*EM|BADJ_EM", names(conf), ignore.case = TRUE)][1]
-  if (is.na(em_col)) em_col <- "BADJ EM"
-  conf <- conf %>%
-    rename(Season = YEAR) %>%
-    mutate(conf_em = suppressWarnings(as.numeric(.data[[em_col]]))) %>%
-    select(Season, CONF, conf_em) %>%
-    filter(!is.na(conf_em))
-  # Team -> Conference from KenPom (github) and Barttorvik
+#' Load team-conference mapping from KenPom/Barttorvik sources
+#' @return Tibble Season, TeamID, Conference
+load_team_conferences <- function(lookup) {
   team_conf <- tibble(Season = integer(), TeamID = integer(), Conference = character())
   kp_path <- file.path(KENPOM_DIR, "kenpom.csv")
   if (file.exists(kp_path) && "Conference" %in% names(read_csv(kp_path, n_max = 1, show_col_types = FALSE))) {
@@ -443,6 +430,25 @@ load_conference_strength <- function(lookup, conf_stats_path = NULL) {
       bt_conf
     )
   }
+  team_conf %>% distinct(Season, TeamID, .keep_all = TRUE)
+}
+
+#' Load team-conference mapping and conference strength (BADJ EM)
+#' Uses KenPom Conference and raw_nishaa Conference Stats.csv
+#' @return Tibble Season, TeamID, conf_em (conference strength, higher = stronger conf)
+load_conference_strength <- function(lookup, conf_stats_path = NULL) {
+  if (is.null(conf_stats_path)) conf_stats_path <- file.path(NISHAA_DIR, "Conference Stats.csv")
+  if (!file.exists(conf_stats_path)) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
+  conf <- read_csv(conf_stats_path, show_col_types = FALSE)
+  if (nrow(conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
+  em_col <- names(conf)[grepl("BADJ.*EM|BADJ_EM", names(conf), ignore.case = TRUE)][1]
+  if (is.na(em_col)) em_col <- "BADJ EM"
+  conf <- conf %>%
+    rename(Season = YEAR) %>%
+    mutate(conf_em = suppressWarnings(as.numeric(.data[[em_col]]))) %>%
+    select(Season, CONF, conf_em) %>%
+    filter(!is.na(conf_em))
+  team_conf <- load_team_conferences(lookup)
   if (nrow(team_conf) == 0) return(tibble(Season = integer(), TeamID = integer(), conf_em = numeric()))
   team_conf %>%
     left_join(conf, by = c("Season", "Conference" = "CONF")) %>%

@@ -70,7 +70,7 @@ get_team_for_seed <- function(seed_id, seeds_df, season) {
 simulate_bracket <- function(season, slots_df, seeds_df, model,
                             win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                             recent_win_pct = NULL, recent_mov = NULL, home_away_stats = NULL, resume_stats = NULL,
-                            head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                            head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                             conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                             tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
                             deterministic = FALSE) {
@@ -125,6 +125,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     if (is.na(round_num)) round_num <- 0L  # First Four play-in games
     features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct,
                                          head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
+                                         conf_tourney_stats = conf_tourney_stats,
                                          home_away_stats = home_away_stats, resume_stats = resume_stats,
                                          recent_win_pct = recent_win_pct, recent_mov = recent_mov,
                                          conference_stats = conference_stats, quadrant_stats = quadrant_stats,

@@ -31,7 +31,7 @@ SKIP_ENSEMBLE_CALIBRATION <- FALSE  # Re-enabled now that holdout years are leak
 MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 
 BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
-                       "pf_diff", "round", "sos_diff",
+                       "pf_diff", "round", "sos_diff", "conf_tourney_depth_diff",
                        "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff",
                        "tourney_winpct_diff", "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games", "upset_winpct_diff")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")

@@ -26,10 +26,10 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 73.40 ± 14.05% | 0.5085 ± 0.1953 |
-| glmnet | baseline | 73.94 ± 9.03% | 0.4949 ± 0.1097 |
-| xgboost | baseline | 73.40 ± 16.69% | 0.5170 ± 0.1400 |
-| rand_forest | baseline | 72.34 ± 10.64% | 0.5069 ± 0.0855 |
+| glm | baseline | 74.47 ± 13.34% | 0.4928 ± 0.1804 |
+| glmnet | baseline | 75.00 ± 8.28% | 0.4746 ± 0.0918 |
+| xgboost | baseline | 76.06 ± 10.66% | 0.5129 ± 0.0881 |
+| rand_forest | baseline | 73.40 ± 9.35% | 0.5080 ± 0.0868 |
 
 ---
 
@@ -39,10 +39,10 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 71.81 ± 13.60% | 0.4976 ± 0.1336 |
-| glmnet | tuned | 73.94 ± 9.83% | 0.4966 ± 0.1191 |
-| xgboost | tuned | 73.40 ± 10.91% | 0.5154 ± 0.0915 |
-| rand_forest | tuned | 73.40 ± 9.35% | 0.5129 ± 0.0742 |
+| glm | tuned | 73.40 ± 10.91% | 0.4778 ± 0.1164 |
+| glmnet | tuned | 75.53 ± 8.23% | 0.4768 ± 0.1024 |
+| xgboost | tuned | 72.87 ± 10.26% | 0.5062 ± 0.1058 |
+| rand_forest | tuned | 74.47 ± 9.14% | 0.5094 ± 0.0753 |
 
 ---
 
@@ -52,7 +52,7 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| glmnet | baseline | 73.94 ± 9.03% | 0.4949 ± 0.1097 |
+| Best (log loss)| glmnet | baseline | 75.00 ± 8.28% | 0.4746 ± 0.0918 |
 
 ---
 
@@ -62,20 +62,20 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 69.68 ± 12.35% | 1.5425 ± 0.8671 | 188 |
+| Ensemble | 69.68 ± 11.45% | 1.6960 ± 0.8897 | 188 |
 
 ### Ensemble Weights
 
 | Model       | Weight  |
 |-------------|--------|
-| glm_baseline | 0.080 |
-| glm_tuned | 0.020 |
-| glmnet_baseline | 0.010 |
-| glmnet_tuned | 0.013 |
-| xgboost_baseline | 0.052 |
-| xgboost_tuned | 0.009 |
-| rand_forest_baseline | 0.546 |
-| rand_forest_tuned | 0.270 |
+| glm_baseline | 0.083 |
+| glm_tuned | 0.024 |
+| glmnet_baseline | 0.012 |
+| glmnet_tuned | 0.016 |
+| xgboost_baseline | 0.003 |
+| xgboost_tuned | 0.016 |
+| rand_forest_baseline | 0.557 |
+| rand_forest_tuned | 0.288 |
 
 *Weights updated 2026-03-16*
 

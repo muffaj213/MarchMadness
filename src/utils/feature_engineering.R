@@ -408,6 +408,103 @@ compute_rest <- function(regular_results, tourney_start_day = 134L) {
     select(Season, TeamID, days_rest)
 }
 
+#' Compute conference tournament depth proxy from late-season same-conference games
+#'
+#' Teams that advance deeper in conference tournaments usually play more
+#' same-conference games in the final pre-tournament week. This captures that
+#' signal directly instead of relying on rest-day differences.
+#'
+#' @param regular_results Data frame with Season, DayNum, WTeamID, LTeamID
+#' @param team_conferences Data frame with Season, TeamID, Conference
+#' @param start_day First day to treat as conference tournament window (default 120)
+#' @param end_day Last pre-NCAA day (default 133)
+#' @return Tibble with Season, TeamID, conf_tourney_games, conf_tourney_wins, conf_tourney_depth
+compute_conference_tourney_depth <- function(regular_results, team_conferences, start_day = 120L, end_day = 133L) {
+  out_cols <- tibble(
+    Season = integer(),
+    TeamID = integer(),
+    conf_tourney_games = integer(),
+    conf_tourney_wins = integer(),
+    conf_tourney_depth = integer()
+  )
+  required_rr <- c("Season", "DayNum", "WTeamID", "LTeamID")
+  if (nrow(regular_results) == 0 || !all(required_rr %in% names(regular_results))) return(out_cols)
+
+  # Base depth proxy from rest: teams with less-than-typical rest likely played
+  # deeper in conference tournament week. This is robust when explicit conf tourney
+  # game labels are unavailable.
+  last_game <- regular_results %>%
+    filter(DayNum < 134L) %>%
+    mutate(TeamID = WTeamID, GameDay = DayNum) %>%
+    bind_rows(
+      regular_results %>%
+        filter(DayNum < 134L) %>%
+        mutate(TeamID = LTeamID, GameDay = DayNum)
+    ) %>%
+    group_by(Season, TeamID) %>%
+    summarise(last_day = max(GameDay, na.rm = TRUE), .groups = "drop") %>%
+    mutate(days_rest = 134L - last_day)
+  if (nrow(last_game) == 0) return(out_cols)
+
+  base_depth <- last_game %>%
+    group_by(Season) %>%
+    mutate(season_med_rest = median(days_rest, na.rm = TRUE)) %>%
+    ungroup() %>%
+    transmute(
+      Season,
+      TeamID,
+      conf_tourney_games = 0L,
+      conf_tourney_wins = 0L,
+      conf_tourney_depth = pmax(0L, as.integer(round(season_med_rest - days_rest)))
+    )
+
+  # Refine with observed late same-conference games when conference mapping exists.
+  if (is.null(team_conferences) || nrow(team_conferences) == 0 ||
+      !all(c("Season", "TeamID", "Conference") %in% names(team_conferences))) {
+    return(base_depth)
+  }
+
+  late_games <- regular_results %>%
+    filter(DayNum >= as.integer(start_day), DayNum < as.integer(end_day)) %>%
+    select(Season, DayNum, WTeamID, LTeamID)
+  if (nrow(late_games) == 0) return(base_depth)
+
+  conf_map <- team_conferences %>%
+    transmute(Season, TeamID = as.integer(TeamID), Conference = as.character(Conference)) %>%
+    filter(!is.na(TeamID), !is.na(Conference), Conference != "") %>%
+    distinct(Season, TeamID, .keep_all = TRUE)
+  if (nrow(conf_map) == 0) return(base_depth)
+
+  same_conf_games <- late_games %>%
+    left_join(conf_map %>% rename(WTeamID = TeamID, WConference = Conference), by = c("Season", "WTeamID")) %>%
+    left_join(conf_map %>% rename(LTeamID = TeamID, LConference = Conference), by = c("Season", "LTeamID")) %>%
+    filter(!is.na(WConference), !is.na(LConference), WConference == LConference)
+
+  if (nrow(same_conf_games) == 0) return(base_depth)
+
+  observed <- bind_rows(
+    same_conf_games %>% transmute(Season, TeamID = WTeamID, won = 1L),
+    same_conf_games %>% transmute(Season, TeamID = LTeamID, won = 0L)
+  ) %>%
+    group_by(Season, TeamID) %>%
+    summarise(
+      conf_tourney_games = as.integer(n()),
+      conf_tourney_wins = as.integer(sum(won)),
+      conf_tourney_depth = as.integer(sum(won)),
+      .groups = "drop"
+    )
+
+  base_depth %>%
+    left_join(observed, by = c("Season", "TeamID"), suffix = c("_base", "_obs")) %>%
+    transmute(
+      Season,
+      TeamID,
+      conf_tourney_games = if_else(!is.na(conf_tourney_games_obs), conf_tourney_games_obs, conf_tourney_games_base),
+      conf_tourney_wins = if_else(!is.na(conf_tourney_wins_obs), conf_tourney_wins_obs, conf_tourney_wins_base),
+      conf_tourney_depth = if_else(!is.na(conf_tourney_depth_obs), conf_tourney_depth_obs, conf_tourney_depth_base)
+    )
+}
+
 #' Compute points-for and points-against per game for each team
 #'
 #' @param regular_results Data frame with WTeamID, LTeamID, WScore, LScore, Season
@@ -459,7 +556,7 @@ compute_points_stats <- function(regular_results) {
 #' @param rest_stats Optional rest (Season, TeamID, days_rest)
 #' @return Data frame with Season, TeamA, TeamB, seed_diff, winpct_diff, etc., outcome
 build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
-                              head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                              head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                               home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
                               conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                               tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL) {
@@ -493,7 +590,7 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       team_a = row$TeamA, team_b = row$TeamB, season = row$Season,
       seeds = seeds, win_pct = win_pct, points_stats = points_stats,
       kenpom_stats = kenpom_stats, late_win_pct = late_win_pct,
-      head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
+      head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats, conf_tourney_stats = conf_tourney_stats,
       home_away_stats = home_away_stats, resume_stats = resume_stats,
       recent_win_pct = recent_win_pct, recent_mov = recent_mov,
       conference_stats = conference_stats, quadrant_stats = quadrant_stats,
@@ -511,7 +608,7 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
   out %>%
     select(Season, TeamA, TeamB, outcome, round, seed_diff, seed_diff_sq, seed_sum, winpct_diff, late_winpct_diff,
            recent_winpct_diff, recent_mov_diff, is_upset_matchup, upset_seed_gap, seed_winpct_interaction, pf_diff, h2h_team_a_winpct, h2h_games,
-           sos_diff, rest_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
+           sos_diff, rest_diff, conf_tourney_depth_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
            tourney_winpct_diff, deepest_run_diff, tourney_h2h_team_a_winpct, tourney_h2h_games, upset_winpct_diff,
            home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
            adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction,
@@ -534,7 +631,7 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
 #' @param round Round of game (1-6); default 1
 #' @return Data frame with one row of features
 compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
-                                     head_to_head = NULL, sos_stats = NULL, rest_stats = NULL,
+                                     head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                                      home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
                                      conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                                      tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL, round = 1L) {
@@ -636,6 +733,23 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     rest_b <- if (length(rest_b) > 0 && !is.na(rest_b[1])) rest_b[1] else 0L
     rest_diff_val <- as.integer(rest_a - rest_b)
   }
+  conf_tourney_depth_diff_val <- 0L
+  CONF_TOURNEY_DEPTH_MINOR_THRESHOLD <- 2L
+  CONF_TOURNEY_DEPTH_MAJOR_THRESHOLD <- 4L
+  if (!is.null(conf_tourney_stats) && nrow(conf_tourney_stats) > 0) {
+    ctd_a <- conf_tourney_stats %>% filter(Season == season, TeamID == team_a) %>% pull(conf_tourney_depth)
+    ctd_b <- conf_tourney_stats %>% filter(Season == season, TeamID == team_b) %>% pull(conf_tourney_depth)
+    ctd_a <- if (length(ctd_a) > 0 && !is.na(ctd_a[1])) ctd_a[1] else 0L
+    ctd_b <- if (length(ctd_b) > 0 && !is.na(ctd_b[1])) ctd_b[1] else 0L
+    raw_depth_diff <- as.integer(ctd_a - ctd_b)
+    # Five-level binning (-2,-1,0,1,2) with wider cutoffs to limit dominance.
+    conf_tourney_depth_diff_val <- as.integer(
+      ifelse(raw_depth_diff >= CONF_TOURNEY_DEPTH_MAJOR_THRESHOLD, 2L,
+             ifelse(raw_depth_diff >= CONF_TOURNEY_DEPTH_MINOR_THRESHOLD, 1L,
+                    ifelse(raw_depth_diff <= -CONF_TOURNEY_DEPTH_MAJOR_THRESHOLD, -2L,
+                           ifelse(raw_depth_diff <= -CONF_TOURNEY_DEPTH_MINOR_THRESHOLD, -1L, 0L))))
+    )
+  }
   conf_em_diff_val <- 0
   quad1_diff_val <- 0
   quad12_diff_val <- 0
@@ -712,6 +826,7 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     h2h_games = h2h_games_val,
     sos_diff = sos_diff_val,
     rest_diff = rest_diff_val,
+    conf_tourney_depth_diff = conf_tourney_depth_diff_val,
     conf_em_diff = conf_em_diff_val,
     quad1_winpct_diff = quad1_diff_val,
     quad12_winpct_diff = quad12_diff_val,

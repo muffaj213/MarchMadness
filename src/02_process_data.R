@@ -193,9 +193,17 @@ main <- function() {
 
   message("Loading conference strength, quadrant stats, First Four...")
   conference_stats <- load_conference_strength(lookup = lookup)
+  team_conferences <- load_team_conferences(lookup = lookup)
+  conf_tourney_stats <- compute_conference_tourney_depth(
+    regular_results = regular_results,
+    team_conferences = team_conferences,
+    start_day = 120L,
+    end_day = 134L
+  )
   quadrant_stats <- load_quadrant_stats(lookup = lookup)
   first_four_stats <- compute_first_four_teams(raw$tourney_results)
   if (nrow(conference_stats) > 0) message("  Conference strength: ", nrow(conference_stats), " team-season rows")
+  if (nrow(conf_tourney_stats) > 0) message("  Conference tourney depth: ", nrow(conf_tourney_stats), " team-season rows")
   if (nrow(quadrant_stats) > 0) message("  Quadrant stats: ", nrow(quadrant_stats), " team-season rows")
   if (nrow(first_four_stats) > 0) message("  First Four teams: ", nrow(first_four_stats), " teams")
 
@@ -218,6 +226,7 @@ main <- function() {
     head_to_head = head_to_head,
     sos_stats = sos_stats,
     rest_stats = rest_stats,
+    conf_tourney_stats = conf_tourney_stats,
     home_away_stats = home_away_stats,
     resume_stats = resume_stats,
     recent_win_pct = recent_win_pct,
@@ -252,6 +261,7 @@ main <- function() {
   if (nrow(upset_history) > 0) write_csv(upset_history, file.path(PROC_DIR, "upset_history.csv"))
   if (nrow(sos_stats) > 0) write_csv(sos_stats, file.path(PROC_DIR, "sos_stats.csv"))
   if (nrow(rest_stats) > 0) write_csv(rest_stats, file.path(PROC_DIR, "rest_stats.csv"))
+  if (nrow(conf_tourney_stats) > 0) write_csv(conf_tourney_stats, file.path(PROC_DIR, "conf_tourney_stats.csv"))
   if (nrow(home_away_stats) > 0) write_csv(home_away_stats, file.path(PROC_DIR, "home_away_stats.csv"))
   if (nrow(resume_stats) > 0) write_csv(resume_stats, file.path(PROC_DIR, "resume_stats.csv"))
   if (nrow(conference_stats) > 0) write_csv(conference_stats, file.path(PROC_DIR, "conference_stats.csv"))

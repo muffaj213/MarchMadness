@@ -26,7 +26,7 @@ read_optional_csv <- function(path) {
 build_prediction_defaults_audit <- function(game_results, season,
                                             win_pct, points_stats, kenpom_stats,
                                             late_win_pct, recent_win_pct, recent_mov,
-                                            sos_stats, rest_stats, conference_stats,
+                                            sos_stats, rest_stats, conf_tourney_stats, conference_stats,
                                             quadrant_stats, resume_stats, home_away_stats,
                                             first_four_stats) {
   has_data <- function(df, sid, tid) {
@@ -46,6 +46,7 @@ build_prediction_defaults_audit <- function(game_results, season,
         if (!has_data(recent_mov, season, team_a)) "recent_mov",
         if (!has_data(sos_stats, season, team_a)) "sos",
         if (!has_data(rest_stats, season, team_a)) "rest",
+        if (!has_data(conf_tourney_stats, season, team_a)) "conf_tourney",
         if (!has_data(conference_stats, season, team_a)) "conference",
         if (!has_data(quadrant_stats, season, team_a)) "quadrant",
         if (!has_data(resume_stats, season, team_a)) "resume",
@@ -61,6 +62,7 @@ build_prediction_defaults_audit <- function(game_results, season,
         if (!has_data(recent_mov, season, team_b)) "recent_mov",
         if (!has_data(sos_stats, season, team_b)) "sos",
         if (!has_data(rest_stats, season, team_b)) "rest",
+        if (!has_data(conf_tourney_stats, season, team_b)) "conf_tourney",
         if (!has_data(conference_stats, season, team_b)) "conference",
         if (!has_data(quadrant_stats, season, team_b)) "quadrant",
         if (!has_data(resume_stats, season, team_b)) "resume",
@@ -123,6 +125,7 @@ load_for_prediction <- function(seeds_file = NULL) {
   head_to_head <- read_optional_csv(file.path(PROC_DIR, "head_to_head.csv"))
   sos_stats <- read_optional_csv(file.path(PROC_DIR, "sos_stats.csv"))
   rest_stats <- read_optional_csv(file.path(PROC_DIR, "rest_stats.csv"))
+  conf_tourney_stats <- read_optional_csv(file.path(PROC_DIR, "conf_tourney_stats.csv"))
   conference_stats <- read_optional_csv(file.path(PROC_DIR, "conference_stats.csv"))
   quadrant_stats <- read_optional_csv(file.path(PROC_DIR, "quadrant_stats.csv"))
   first_four_stats <- read_optional_csv(file.path(PROC_DIR, "first_four_stats.csv"))
@@ -230,6 +233,11 @@ load_for_prediction <- function(seeds_file = NULL) {
   recent_mov <- ensure_seed_defaults(recent_mov, list(RecentMOV = 0), "recent_mov")
   sos_stats <- ensure_seed_defaults(sos_stats, list(sos = 0.5), "sos")
   rest_stats <- ensure_seed_defaults(rest_stats, list(days_rest = 0L), "rest")
+  conf_tourney_stats <- ensure_seed_defaults(conf_tourney_stats, list(
+    conf_tourney_games = 0L,
+    conf_tourney_wins = 0L,
+    conf_tourney_depth = 0L
+  ), "conf_tourney")
   conference_stats <- ensure_seed_defaults(conference_stats, list(conf_em = 0), "conference")
   quadrant_stats <- ensure_seed_defaults(quadrant_stats, list(quad1_winpct = 0.5, quad12_winpct = 0.5), "quadrant")
   home_away_stats <- ensure_seed_defaults(home_away_stats, list(home_win_rate = 0.5, away_win_rate = 0.5), "home_away")
@@ -305,6 +313,7 @@ load_for_prediction <- function(seeds_file = NULL) {
     head_to_head = head_to_head,
     sos_stats = sos_stats,
     rest_stats = rest_stats,
+    conf_tourney_stats = conf_tourney_stats,
     conference_stats = conference_stats,
     quadrant_stats = quadrant_stats,
     first_four_stats = first_four_stats,
@@ -348,6 +357,7 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
       head_to_head = data$head_to_head,
       sos_stats = data$sos_stats,
       rest_stats = data$rest_stats,
+      conf_tourney_stats = data$conf_tourney_stats,
       conference_stats = data$conference_stats,
       quadrant_stats = data$quadrant_stats,
       first_four_stats = data$first_four_stats,
@@ -429,6 +439,7 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     head_to_head = data$head_to_head,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
+    conf_tourney_stats = data$conf_tourney_stats,
     conference_stats = data$conference_stats,
     quadrant_stats = data$quadrant_stats,
     first_four_stats = data$first_four_stats,
@@ -489,6 +500,7 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     recent_mov = data$recent_mov,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
+    conf_tourney_stats = data$conf_tourney_stats,
     conference_stats = data$conference_stats,
     quadrant_stats = data$quadrant_stats,
     resume_stats = data$resume_stats,
