@@ -28,7 +28,8 @@ build_prediction_defaults_audit <- function(game_results, season,
                                             late_win_pct, recent_win_pct, recent_mov,
                                             sos_stats, rest_stats, conf_tourney_stats, conference_stats,
                                             quadrant_stats, resume_stats, home_away_stats,
-                                            first_four_stats) {
+                                            first_four_stats, fte_ratings, evanmiya_metrics,
+                                            shooting_style_metrics, tourney_location_metrics) {
   has_data <- function(df, sid, tid) {
     if (is.null(df) || nrow(df) == 0) return(FALSE)
     if (!"TeamID" %in% names(df)) return(FALSE)
@@ -51,7 +52,11 @@ build_prediction_defaults_audit <- function(game_results, season,
         if (!has_data(quadrant_stats, season, team_a)) "quadrant",
         if (!has_data(resume_stats, season, team_a)) "resume",
         if (!has_data(home_away_stats, season, team_a)) "home_away",
-        if (!has_data(first_four_stats, season, team_a)) "first_four"
+        if (!has_data(first_four_stats, season, team_a)) "first_four",
+        if (!has_data(fte_ratings, season, team_a)) "538_rating",
+        if (!has_data(evanmiya_metrics, season, team_a)) "evanmiya",
+        if (!has_data(shooting_style_metrics, season, team_a)) "shooting",
+        if (!has_data(tourney_location_metrics, season, team_a)) "location"
       ), collapse = ","),
       team_b_missing = paste(c(
         if (!has_data(win_pct, season, team_b)) "win_pct",
@@ -67,7 +72,11 @@ build_prediction_defaults_audit <- function(game_results, season,
         if (!has_data(quadrant_stats, season, team_b)) "quadrant",
         if (!has_data(resume_stats, season, team_b)) "resume",
         if (!has_data(home_away_stats, season, team_b)) "home_away",
-        if (!has_data(first_four_stats, season, team_b)) "first_four"
+        if (!has_data(first_four_stats, season, team_b)) "first_four",
+        if (!has_data(fte_ratings, season, team_b)) "538_rating",
+        if (!has_data(evanmiya_metrics, season, team_b)) "evanmiya",
+        if (!has_data(shooting_style_metrics, season, team_b)) "shooting",
+        if (!has_data(tourney_location_metrics, season, team_b)) "location"
       ), collapse = ",")
     ) %>%
     ungroup() %>%
@@ -122,6 +131,11 @@ load_for_prediction <- function(seeds_file = NULL) {
   }
   home_away_stats <- read_optional_csv(file.path(PROC_DIR, "home_away_stats.csv"))
   resume_stats <- read_optional_csv(file.path(PROC_DIR, "resume_stats.csv"))
+  fte_ratings <- read_optional_csv(file.path(PROC_DIR, "fte_ratings.csv"))
+  evanmiya_metrics <- read_optional_csv(file.path(PROC_DIR, "evanmiya_metrics.csv"))
+  shooting_style_metrics <- read_optional_csv(file.path(PROC_DIR, "shooting_style_metrics.csv"))
+  tourney_location_metrics <- read_optional_csv(file.path(PROC_DIR, "tourney_location_metrics.csv"))
+  seed_round_priors <- read_optional_csv(file.path(PROC_DIR, "seed_round_priors.csv"))
   head_to_head <- read_optional_csv(file.path(PROC_DIR, "head_to_head.csv"))
   sos_stats <- read_optional_csv(file.path(PROC_DIR, "sos_stats.csv"))
   rest_stats <- read_optional_csv(file.path(PROC_DIR, "rest_stats.csv"))
@@ -186,6 +200,10 @@ load_for_prediction <- function(seeds_file = NULL) {
   home_away_raw <- load_home_away_win_rates(lookup = lookup)
   resume_raw <- load_resume_stats(lookup = lookup)
   bt_resume_raw <- load_barttorvik_resume_metrics(lookup = lookup)
+  fte_raw <- load_fte_ratings(lookup = lookup)
+  evan_raw <- load_evanmiya_metrics(lookup = lookup)
+  shooting_raw <- load_shooting_style_metrics(lookup = lookup)
+  location_raw <- load_tourney_location_metrics(lookup = lookup)
   if (nrow(bt_resume_raw) > 0) {
     resume_raw <- if (nrow(resume_raw) > 0) {
       resume_raw %>% full_join(bt_resume_raw, by = c("Season", "TeamID"))
@@ -198,6 +216,27 @@ load_for_prediction <- function(seeds_file = NULL) {
 
   home_away_stats <- augment_team_feature(home_away_stats, home_away_raw, "home/away stats")
   resume_stats <- augment_team_feature(resume_stats, resume_raw, "resume stats")
+  fte_ratings <- augment_team_feature(fte_ratings, fte_raw, "538 ratings")
+  evanmiya_metrics <- augment_team_feature(evanmiya_metrics, evan_raw, "EvanMiya metrics")
+  shooting_style_metrics <- augment_team_feature(shooting_style_metrics, shooting_raw, "shooting style metrics")
+  if (!is.null(location_raw) && nrow(location_raw) > 0) {
+    have_loc_seasons <- if (!is.null(tourney_location_metrics) && nrow(tourney_location_metrics) > 0 &&
+                             "Season" %in% names(tourney_location_metrics)) unique(tourney_location_metrics$Season) else integer()
+    need_loc <- setdiff(seeds_seasons, have_loc_seasons)
+    if (length(need_loc) > 0) {
+      loc_add <- location_raw %>% filter(Season %in% need_loc)
+      if (nrow(loc_add) > 0) {
+        tourney_location_metrics <- if (is.null(tourney_location_metrics) || nrow(tourney_location_metrics) == 0) {
+          loc_add
+        } else {
+          bind_rows(tourney_location_metrics, loc_add) %>%
+            distinct(Season, TeamID, round, .keep_all = TRUE)
+        }
+        message("Augmented tournament location metrics for season(s) ", paste(sort(unique(loc_add$Season)), collapse = ", "),
+                " (", nrow(loc_add), " rows)")
+      }
+    }
+  }
   conference_stats <- augment_team_feature(conference_stats, conference_raw, "conference stats")
   quadrant_stats <- augment_team_feature(quadrant_stats, quadrant_raw, "quadrant stats")
 
@@ -242,6 +281,11 @@ load_for_prediction <- function(seeds_file = NULL) {
   quadrant_stats <- ensure_seed_defaults(quadrant_stats, list(quad1_winpct = 0.5, quad12_winpct = 0.5), "quadrant")
   home_away_stats <- ensure_seed_defaults(home_away_stats, list(home_win_rate = 0.5, away_win_rate = 0.5), "home_away")
   resume_stats <- ensure_seed_defaults(resume_stats, list(elo = 0, net = 200, wab = 200, barthag = 0.5, elite_sos = 0), "resume")
+  fte_ratings <- ensure_seed_defaults(fte_ratings, list(fte_power_rating = 0), "538_rating")
+  evanmiya_metrics <- ensure_seed_defaults(evanmiya_metrics, list(injury_rank = 180, roster_rank = 180, evan_killshots_margin = 0), "evanmiya")
+  shooting_style_metrics <- ensure_seed_defaults(shooting_style_metrics, list(
+    threes_share = 35, threes_d_share = 35, close_twos_share = 35, close_twos_d_share = 35
+  ), "shooting")
   first_four_stats <- ensure_seed_defaults(first_four_stats, list(played_first_four = 0L), "first_four")
 
   # Compute historical tournament features for prediction seasons not in saved data (e.g. 2026)
@@ -310,6 +354,11 @@ load_for_prediction <- function(seeds_file = NULL) {
     kenpom_stats = kenpom_stats,
     home_away_stats = home_away_stats,
     resume_stats = resume_stats,
+    fte_ratings = fte_ratings,
+    evanmiya_metrics = evanmiya_metrics,
+    shooting_style_metrics = shooting_style_metrics,
+    tourney_location_metrics = tourney_location_metrics,
+    seed_round_priors = seed_round_priors,
     head_to_head = head_to_head,
     sos_stats = sos_stats,
     rest_stats = rest_stats,
@@ -354,6 +403,11 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
       recent_mov = data$recent_mov,
       home_away_stats = data$home_away_stats,
       resume_stats = data$resume_stats,
+      fte_ratings = data$fte_ratings,
+      evanmiya_metrics = data$evanmiya_metrics,
+      shooting_style_metrics = data$shooting_style_metrics,
+      tourney_location_metrics = data$tourney_location_metrics,
+      seed_round_priors = data$seed_round_priors,
       head_to_head = data$head_to_head,
       sos_stats = data$sos_stats,
       rest_stats = data$rest_stats,
@@ -394,7 +448,7 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
 }
 
 main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE,
-                 run_monte_carlo_output = TRUE, monte_carlo_sims = 1000L, monte_carlo_seed = 2026L) {
+                 run_monte_carlo_output = TRUE, monte_carlo_sims = 5000L, monte_carlo_seed = 2026L) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
   # Use manual 2025 seeds when predicting 2025 and no seeds_file specified
@@ -436,6 +490,11 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     recent_mov = data$recent_mov,
     home_away_stats = data$home_away_stats,
     resume_stats = data$resume_stats,
+    fte_ratings = data$fte_ratings,
+    evanmiya_metrics = data$evanmiya_metrics,
+    shooting_style_metrics = data$shooting_style_metrics,
+    tourney_location_metrics = data$tourney_location_metrics,
+    seed_round_priors = data$seed_round_priors,
     head_to_head = data$head_to_head,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
@@ -505,7 +564,11 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     quadrant_stats = data$quadrant_stats,
     resume_stats = data$resume_stats,
     home_away_stats = data$home_away_stats,
-    first_four_stats = data$first_four_stats
+    first_four_stats = data$first_four_stats,
+    fte_ratings = data$fte_ratings,
+    evanmiya_metrics = data$evanmiya_metrics,
+    shooting_style_metrics = data$shooting_style_metrics,
+    tourney_location_metrics = data$tourney_location_metrics
   )
   defaults_audit <- defaults_audit %>%
     mutate(

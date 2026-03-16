@@ -176,6 +176,10 @@ main <- function() {
   home_away_stats <- load_home_away_win_rates(lookup = lookup)
   resume_stats <- load_resume_stats(lookup = lookup)
   barttorvik_metrics <- load_barttorvik_resume_metrics(lookup = lookup)
+  fte_ratings <- load_fte_ratings(lookup = lookup)
+  evanmiya_metrics <- load_evanmiya_metrics(lookup = lookup)
+  shooting_style_metrics <- load_shooting_style_metrics(lookup = lookup)
+  tourney_location_metrics <- load_tourney_location_metrics(lookup = lookup)
   if (nrow(barttorvik_metrics) > 0 && nrow(resume_stats) > 0) {
     resume_stats <- resume_stats %>%
       left_join(barttorvik_metrics, by = c("Season", "TeamID")) %>%
@@ -190,6 +194,10 @@ main <- function() {
   }
   if (nrow(home_away_stats) > 0) message("  Home/away: ", nrow(home_away_stats), " team-season rows")
   if (nrow(resume_stats) > 0) message("  Resume (NET/ELO/WAB): ", nrow(resume_stats), " team-season rows")
+  if (nrow(fte_ratings) > 0) message("  538 ratings: ", nrow(fte_ratings), " team-season rows")
+  if (nrow(evanmiya_metrics) > 0) message("  EvanMiya metrics: ", nrow(evanmiya_metrics), " team-season rows")
+  if (nrow(shooting_style_metrics) > 0) message("  Shooting style metrics: ", nrow(shooting_style_metrics), " team-season rows")
+  if (nrow(tourney_location_metrics) > 0) message("  Tournament location metrics: ", nrow(tourney_location_metrics), " team-season-round rows")
 
   message("Loading conference strength, quadrant stats, First Four...")
   conference_stats <- load_conference_strength(lookup = lookup)
@@ -236,8 +244,30 @@ main <- function() {
     first_four_stats = first_four_stats,
     tourney_history_stats = tourney_history_stats,
     tourney_h2h = tourney_h2h,
-    upset_history = upset_history
+    upset_history = upset_history,
+    fte_ratings = fte_ratings,
+    evanmiya_metrics = evanmiya_metrics,
+    shooting_style_metrics = shooting_style_metrics,
+    tourney_location_metrics = tourney_location_metrics
   )
+
+  seed_round_priors <- raw$tourney_results %>%
+    left_join(raw$tourney_seeds %>% mutate(SeedNum = parse_seed_number(Seed)) %>% select(Season, TeamID, SeedNum),
+              by = c("Season", "WTeamID" = "TeamID")) %>%
+    rename(WSeed = SeedNum) %>%
+    left_join(raw$tourney_seeds %>% mutate(SeedNum = parse_seed_number(Seed)) %>% select(Season, TeamID, SeedNum),
+              by = c("Season", "LTeamID" = "TeamID")) %>%
+    rename(LSeed = SeedNum) %>%
+    filter(!is.na(WSeed), !is.na(LSeed)) %>%
+    mutate(
+      round = if ("DayNum" %in% names(.)) daynum_to_round(DayNum) else 1L,
+      seed_low = pmin(WSeed, LSeed),
+      seed_high = pmax(WSeed, LSeed),
+      low_seed_won = as.integer(WSeed <= LSeed)
+    ) %>%
+    group_by(round, seed_low, seed_high) %>%
+    summarise(n_games = n(), low_seed_win_rate = mean(low_seed_won), .groups = "drop") %>%
+    filter(n_games >= 5)
 
   message("Saving processed data...")
   write_csv(win_pct, file.path(PROC_DIR, "win_pct.csv"))
@@ -264,9 +294,14 @@ main <- function() {
   if (nrow(conf_tourney_stats) > 0) write_csv(conf_tourney_stats, file.path(PROC_DIR, "conf_tourney_stats.csv"))
   if (nrow(home_away_stats) > 0) write_csv(home_away_stats, file.path(PROC_DIR, "home_away_stats.csv"))
   if (nrow(resume_stats) > 0) write_csv(resume_stats, file.path(PROC_DIR, "resume_stats.csv"))
+  if (nrow(fte_ratings) > 0) write_csv(fte_ratings, file.path(PROC_DIR, "fte_ratings.csv"))
+  if (nrow(evanmiya_metrics) > 0) write_csv(evanmiya_metrics, file.path(PROC_DIR, "evanmiya_metrics.csv"))
+  if (nrow(shooting_style_metrics) > 0) write_csv(shooting_style_metrics, file.path(PROC_DIR, "shooting_style_metrics.csv"))
+  if (nrow(tourney_location_metrics) > 0) write_csv(tourney_location_metrics, file.path(PROC_DIR, "tourney_location_metrics.csv"))
   if (nrow(conference_stats) > 0) write_csv(conference_stats, file.path(PROC_DIR, "conference_stats.csv"))
   if (nrow(quadrant_stats) > 0) write_csv(quadrant_stats, file.path(PROC_DIR, "quadrant_stats.csv"))
   if (nrow(first_four_stats) > 0) write_csv(first_four_stats, file.path(PROC_DIR, "first_four_stats.csv"))
+  if (nrow(seed_round_priors) > 0) write_csv(seed_round_priors, file.path(PROC_DIR, "seed_round_priors.csv"))
 
   # Save seeds and slots for prediction
   # Build 68-team slots for 2011+ (First Four play-in games)

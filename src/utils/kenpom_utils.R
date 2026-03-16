@@ -509,3 +509,140 @@ load_barttorvik_resume_metrics <- function(bt_path = NULL, lookup) {
     ) %>%
     select(Season, TeamID, barthag, elite_sos)
 }
+
+#' Load FiveThirtyEight power ratings
+#' @return Tibble with Season, TeamID, fte_power_rating
+load_fte_ratings <- function(path = NULL, lookup) {
+  if (is.null(path)) path <- file.path(NISHAA_DIR, "538 Ratings.csv")
+  if (!file.exists(path)) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  if (nrow(df) == 0) return(tibble())
+  if (!all(c("YEAR", "TEAM") %in% names(df))) return(tibble())
+  rating_col <- names(df)[grep("POWER\\s*RATING|POWER_RATING", names(df), ignore.case = TRUE)][1]
+  if (is.na(rating_col)) return(tibble())
+  team_no_col <- names(df)[grep("^TEAM\\s*NO$|^TEAM_NO$", names(df), ignore.case = TRUE)][1]
+  out <- df %>%
+    transmute(
+      Season = as.integer(YEAR),
+      Team = TEAM,
+      TeamID = if (!is.na(team_no_col) && team_no_col %in% names(.)) suppressWarnings(as.integer(.data[[team_no_col]])) else NA_integer_,
+      fte_power_rating = suppressWarnings(as.numeric(.data[[rating_col]]))
+    )
+  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out %>%
+    filter(!is.na(TeamID), !is.na(fte_power_rating)) %>%
+    select(Season, TeamID, fte_power_rating) %>%
+    distinct(Season, TeamID, .keep_all = TRUE)
+}
+
+#' Load EvanMiya team metrics
+#' @return Tibble with Season, TeamID, injury_rank, roster_rank, evan_killshots_margin
+load_evanmiya_metrics <- function(path = NULL, lookup) {
+  if (is.null(path)) path <- file.path(NISHAA_DIR, "EvanMiya.csv")
+  if (!file.exists(path)) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  if (nrow(df) == 0) return(tibble())
+  if (!all(c("YEAR", "TEAM") %in% names(df))) return(tibble())
+  team_no_col <- names(df)[grep("^TEAM\\s*NO$|^TEAM_NO$", names(df), ignore.case = TRUE)][1]
+  injury_col <- names(df)[grep("INJURY\\s*RANK|INJURY_RANK", names(df), ignore.case = TRUE)][1]
+  roster_col <- names(df)[grep("ROSTER\\s*RANK|ROSTER_RANK", names(df), ignore.case = TRUE)][1]
+  ks_col <- names(df)[grep("KILLSHOTS\\s*MARGIN|KILLSHOTS_MARGIN", names(df), ignore.case = TRUE)][1]
+  if (is.na(injury_col) && is.na(roster_col) && is.na(ks_col)) return(tibble())
+  out <- df %>%
+    transmute(
+      Season = as.integer(YEAR),
+      Team = TEAM,
+      TeamID = if (!is.na(team_no_col) && team_no_col %in% names(.)) suppressWarnings(as.integer(.data[[team_no_col]])) else NA_integer_,
+      injury_rank = if (!is.na(injury_col)) suppressWarnings(as.numeric(.data[[injury_col]])) else NA_real_,
+      roster_rank = if (!is.na(roster_col)) suppressWarnings(as.numeric(.data[[roster_col]])) else NA_real_,
+      evan_killshots_margin = if (!is.na(ks_col)) suppressWarnings(as.numeric(.data[[ks_col]])) else NA_real_
+    )
+  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out %>%
+    filter(!is.na(TeamID)) %>%
+    select(Season, TeamID, injury_rank, roster_rank, evan_killshots_margin) %>%
+    distinct(Season, TeamID, .keep_all = TRUE)
+}
+
+#' Load shooting style metrics
+#' @return Tibble with Season, TeamID, threes_share, threes_d_share, close_twos_share, close_twos_d_share
+load_shooting_style_metrics <- function(path = NULL, lookup) {
+  if (is.null(path)) path <- file.path(NISHAA_DIR, "Shooting Splits.csv")
+  if (!file.exists(path)) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  if (nrow(df) == 0) return(tibble())
+  if (!all(c("YEAR", "TEAM") %in% names(df))) return(tibble())
+  team_no_col <- names(df)[grep("^TEAM\\s*NO$|^TEAM_NO$", names(df), ignore.case = TRUE)][1]
+  ts_col <- names(df)[grep("THREES\\s*SHARE|THREES_SHARE", names(df), ignore.case = TRUE)][1]
+  tsd_col <- names(df)[grep("THREES\\s*D\\s*SHARE|THREES_D_SHARE", names(df), ignore.case = TRUE)][1]
+  c2_col <- names(df)[grep("CLOSE\\s*TWOS\\s*SHARE|CLOSE_TWOS_SHARE", names(df), ignore.case = TRUE)][1]
+  c2d_col <- names(df)[grep("CLOSE\\s*TWOS\\s*D\\s*SHARE|CLOSE_TWOS_D_SHARE", names(df), ignore.case = TRUE)][1]
+  if (is.na(ts_col) && is.na(tsd_col) && is.na(c2_col) && is.na(c2d_col)) return(tibble())
+  out <- df %>%
+    transmute(
+      Season = as.integer(YEAR),
+      Team = TEAM,
+      TeamID = if (!is.na(team_no_col) && team_no_col %in% names(.)) suppressWarnings(as.integer(.data[[team_no_col]])) else NA_integer_,
+      threes_share = if (!is.na(ts_col)) suppressWarnings(as.numeric(.data[[ts_col]])) else NA_real_,
+      threes_d_share = if (!is.na(tsd_col)) suppressWarnings(as.numeric(.data[[tsd_col]])) else NA_real_,
+      close_twos_share = if (!is.na(c2_col)) suppressWarnings(as.numeric(.data[[c2_col]])) else NA_real_,
+      close_twos_d_share = if (!is.na(c2d_col)) suppressWarnings(as.numeric(.data[[c2d_col]])) else NA_real_
+    )
+  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out %>%
+    filter(!is.na(TeamID)) %>%
+    select(Season, TeamID, threes_share, threes_d_share, close_twos_share, close_twos_d_share) %>%
+    distinct(Season, TeamID, .keep_all = TRUE)
+}
+
+#' Map Tournament Locations round values to model rounds (0-6)
+map_location_round <- function(round_val) {
+  r <- suppressWarnings(as.integer(round_val))
+  dplyr::case_when(
+    is.na(r) ~ NA_integer_,
+    r >= 64L ~ 1L,
+    r == 32L ~ 2L,
+    r == 16L ~ 3L,
+    r == 8L ~ 4L,
+    r == 4L ~ 5L,
+    r <= 2L ~ 6L,
+    TRUE ~ NA_integer_
+  )
+}
+
+#' Load travel/location metrics by team-season-round from Tournament Locations.csv
+#' @return Tibble with Season, TeamID, round, travel_miles, timezones_crossed
+load_tourney_location_metrics <- function(path = NULL, lookup) {
+  if (is.null(path)) path <- file.path(NISHAA_DIR, "Tournament Locations.csv")
+  if (!file.exists(path)) return(tibble())
+  df <- read_csv(path, show_col_types = FALSE)
+  if (nrow(df) == 0) return(tibble())
+  if (!all(c("YEAR", "TEAM") %in% names(df))) return(tibble())
+  team_no_col <- names(df)[grep("^TEAM\\s*NO$|^TEAM_NO$", names(df), ignore.case = TRUE)][1]
+  round_col <- names(df)[grep("^ROUND$|CURRENT\\s*ROUND|CURRENT_ROUND", names(df), ignore.case = TRUE)][1]
+  miles_col <- names(df)[grep("DISTANCE\\s*\\(MI\\)|DISTANCE_\\(MI\\)|DISTANCE_MI", names(df), ignore.case = TRUE)][1]
+  tz_col <- names(df)[grep("TIME\\s*ZONES\\s*CROSSED\\s*VALUE|TIME_ZONES_CROSSED_VALUE", names(df), ignore.case = TRUE)][1]
+  if (is.na(round_col) || is.na(miles_col)) return(tibble())
+  out <- df %>%
+    transmute(
+      Season = as.integer(YEAR),
+      Team = TEAM,
+      TeamID = if (!is.na(team_no_col) && team_no_col %in% names(.)) suppressWarnings(as.integer(.data[[team_no_col]])) else NA_integer_,
+      round = map_location_round(.data[[round_col]]),
+      travel_miles = suppressWarnings(as.numeric(.data[[miles_col]])),
+      timezones_crossed = if (!is.na(tz_col)) suppressWarnings(as.numeric(.data[[tz_col]])) else 0
+    )
+  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out %>%
+    filter(!is.na(TeamID), !is.na(round)) %>%
+    group_by(Season, TeamID, round) %>%
+    summarise(
+      travel_miles = mean(travel_miles, na.rm = TRUE),
+      timezones_crossed = mean(timezones_crossed, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      travel_miles = ifelse(is.na(travel_miles), 0, travel_miles),
+      timezones_crossed = ifelse(is.na(timezones_crossed), 0, timezones_crossed)
+    )
+}

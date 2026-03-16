@@ -9,6 +9,23 @@
 library(dplyr)
 library(purrr)
 
+#' Apply Platt scaling coefficients to probabilities
+apply_platt_probs <- function(prob, cal) {
+  if (is.null(cal) || is.null(cal$intercept) || is.null(cal$slope)) return(prob)
+  eps <- 1e-15
+  p <- pmax(eps, pmin(1 - eps, as.numeric(prob)))
+  as.numeric(plogis(cal$intercept + cal$slope * qlogis(p)))
+}
+
+#' Predict method for calibrated_model wrapper
+predict.calibrated_model <- function(object, new_data, type = "prob", ...) {
+  if (type != "prob") stop("calibrated_model only supports type = 'prob'")
+  p <- predict(object$model, new_data, type = "prob")
+  prob_win <- as.numeric(p$.pred_Win)
+  prob_win <- apply_platt_probs(prob_win, object$calibrator)
+  tibble::tibble(.pred_Lose = 1 - prob_win, .pred_Win = prob_win)
+}
+
 #' Predict method for ensemble_model (blends sub-model probabilities)
 #' Applies Platt scaling calibration if object$calibration is present.
 predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
@@ -16,9 +33,18 @@ predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
   probs <- matrix(NA_real_, nrow = nrow(new_data), ncol = length(object$models))
   for (i in seq_along(object$models)) {
     p <- predict(object$models[[i]], new_data, type = "prob")
-    probs[, i] <- as.numeric(p$.pred_Win)
+    p_i <- as.numeric(p$.pred_Win)
+    if (!is.null(object$calibrators) && !is.null(object$calibrators[[i]])) {
+      p_i <- apply_platt_probs(p_i, object$calibrators[[i]])
+    }
+    probs[, i] <- p_i
   }
-  prob_win <- as.numeric(probs %*% object$weights)
+  if (!is.null(object$meta_coef)) {
+    x <- cbind(1, probs)
+    prob_win <- as.numeric(plogis(x %*% object$meta_coef))
+  } else {
+    prob_win <- as.numeric(probs %*% object$weights)
+  }
   eps <- 1e-15
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
   if (!is.null(object$calibration) && requireNamespace("probably", quietly = TRUE)) {
@@ -28,6 +54,19 @@ predict.ensemble_model <- function(object, new_data, type = "prob", ...) {
     prob_win <- pmax(eps, pmin(1 - eps, prob_win))
   }
   tibble::tibble(.pred_Lose = 1 - prob_win, .pred_Win = prob_win)
+}
+
+#' Lookup historical seed-round prior for Team A win probability
+seed_round_prior_prob <- function(seed_a, seed_b, round_num, seed_round_priors) {
+  if (is.null(seed_round_priors) || nrow(seed_round_priors) == 0) return(NA_real_)
+  if (is.na(seed_a) || is.na(seed_b)) return(NA_real_)
+  low <- min(seed_a, seed_b)
+  high <- max(seed_a, seed_b)
+  row <- seed_round_priors %>% filter(round == round_num, seed_low == low, seed_high == high)
+  if (nrow(row) == 0) return(NA_real_)
+  low_seed_prob <- as.numeric(row$low_seed_win_rate[1])
+  if (is.na(low_seed_prob)) return(NA_real_)
+  if (seed_a == low) low_seed_prob else (1 - low_seed_prob)
 }
 
 #' Check if a slot/seed ID refers to a first-round seed (e.g., W01, X16, W16a)
@@ -70,6 +109,8 @@ get_team_for_seed <- function(seed_id, seeds_df, season) {
 simulate_bracket <- function(season, slots_df, seeds_df, model,
                             win_pct, points_stats, kenpom_stats = NULL, late_win_pct = NULL,
                             recent_win_pct = NULL, recent_mov = NULL, home_away_stats = NULL, resume_stats = NULL,
+                            fte_ratings = NULL, evanmiya_metrics = NULL, shooting_style_metrics = NULL,
+                            tourney_location_metrics = NULL, seed_round_priors = NULL,
                             head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                             conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                             tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
@@ -127,6 +168,8 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                                          head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
                                          conf_tourney_stats = conf_tourney_stats,
                                          home_away_stats = home_away_stats, resume_stats = resume_stats,
+                                         fte_ratings = fte_ratings, evanmiya_metrics = evanmiya_metrics,
+                                         shooting_style_metrics = shooting_style_metrics, tourney_location_metrics = tourney_location_metrics,
                                          recent_win_pct = recent_win_pct, recent_mov = recent_mov,
                                          conference_stats = conference_stats, quadrant_stats = quadrant_stats,
                                          first_four_stats = first_four_stats,
@@ -138,6 +181,8 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
       {
         pred_prob <- NULL
         if (inherits(model, "ensemble_model")) {
+          pred_prob <- predict(model, new_data = features, type = "prob")
+        } else if (inherits(model, "calibrated_model")) {
           pred_prob <- predict(model, new_data = features, type = "prob")
         } else if (inherits(model, "workflow")) {
           pred_prob <- predict(model, new_data = features, type = "prob")
@@ -159,6 +204,18 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
 
     prob_a_wins <- as.numeric(pred[1])
     if (is.na(prob_a_wins)) prob_a_wins <- 0.5
+    seed_a <- seeds_df %>% mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed))) %>%
+      filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
+    seed_b <- seeds_df %>% mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed))) %>%
+      filter(Season == season, TeamID == team_b) %>% pull(SeedNum)
+    seed_a <- if (length(seed_a) > 0) seed_a[1] else NA_integer_
+    seed_b <- if (length(seed_b) > 0) seed_b[1] else NA_integer_
+    prior_a <- seed_round_prior_prob(seed_a, seed_b, round_num, seed_round_priors)
+    if (!is.na(prior_a)) {
+      gap <- abs(prob_a_wins - prior_a)
+      alpha <- min(0.35, 0.6 * gap)
+      prob_a_wins <- (1 - alpha) * prob_a_wins + alpha * prior_a
+    }
 
     if (deterministic) {
       winner <- if (prob_a_wins >= 0.5) team_a else team_b

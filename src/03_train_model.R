@@ -33,8 +33,11 @@ MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
                        "pf_diff", "round", "sos_diff", "conf_tourney_depth_diff",
                        "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff",
-                       "tourney_winpct_diff", "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games", "upset_winpct_diff")
-EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff")
+                       "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games")
+EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff",
+                        "fte_power_diff", "injury_rank_diff", "roster_rank_diff", "evan_killshots_margin_diff",
+                        "three_share_diff", "three_point_mismatch", "close2_share_diff", "close2_point_mismatch",
+                        "travel_miles_adv", "timezones_adv")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
                          "adjem_seed_interaction")
 
@@ -172,16 +175,52 @@ make_time_folds <- function(data, first_validation_year = TUNE_VALIDATION_FIRST_
   rsample::manual_rset(splits, ids[seq_len(length(splits))])
 }
 
+#' Extract win probabilities from a fitted model object
+predict_win_prob <- function(model, new_data) {
+  pred <- predict(model, new_data, type = "prob")
+  as.numeric(pred$.pred_Win)
+}
+
+#' Fit Platt scaling calibrator on a calibration set
+#' @return list(intercept, slope) or NULL
+fit_platt_calibrator <- function(model, calibration_data, min_rows = 40L) {
+  if (is.null(calibration_data) || nrow(calibration_data) < min_rows) return(NULL)
+  pred_prob <- tryCatch(predict_win_prob(model, calibration_data), error = function(e) NULL)
+  if (is.null(pred_prob)) return(NULL)
+  y <- as.integer(calibration_data$outcome == "Win")
+  eps <- 1e-6
+  p <- pmax(eps, pmin(1 - eps, pred_prob))
+  z <- qlogis(p)
+  fit <- tryCatch(glm(y ~ z, family = binomial()), error = function(e) NULL)
+  if (is.null(fit)) return(NULL)
+  co <- coef(fit)
+  if (length(co) < 2 || any(is.na(co))) return(NULL)
+  if (abs(co[1]) > 5 || co[2] < 0.25 || co[2] > 3) return(NULL)
+  raw_ll <- -mean(y * log(p) + (1 - y) * log(1 - p))
+  p_cal <- plogis(co[1] + co[2] * z)
+  cal_ll <- -mean(y * log(pmax(eps, pmin(1 - eps, p_cal))) + (1 - y) * log(pmax(eps, pmin(1 - eps, 1 - p_cal))))
+  if (cal_ll >= raw_ll * 0.995) return(NULL)
+  list(intercept = as.numeric(co[1]), slope = as.numeric(co[2]))
+}
+
+#' Apply Platt scaling coefficients to probabilities
+apply_platt <- function(prob, calibrator) {
+  if (is.null(calibrator)) return(prob)
+  eps <- 1e-15
+  p <- pmax(eps, pmin(1 - eps, as.numeric(prob)))
+  plogis(calibrator$intercept + calibrator$slope * qlogis(p))
+}
+
 #' Evaluate model on held-out season(s); supports single or multiple years
 #' @return List with accuracy, log_loss, and (for multi-year) accuracy_sd, log_loss_sd, per_year
-evaluate_model <- function(model, matchup_data, test_seasons) {
+evaluate_model <- function(model, matchup_data, test_seasons, calibrator = NULL) {
   test_data <- matchup_data %>%
     filter(Season %in% test_seasons) %>%
     mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
   if (nrow(test_data) == 0) return(NULL)
 
-  pred <- predict(model, test_data, type = "prob")
-  prob_win <- pred$.pred_Win
+  prob_win <- predict_win_prob(model, test_data)
+  prob_win <- apply_platt(prob_win, calibrator)
   test_data$pred_prob <- prob_win
   test_data$pred_class <- as.integer(prob_win >= 0.5)
   test_data$outcome_num <- as.integer(test_data$outcome == "Win")
@@ -246,7 +285,12 @@ run_baseline <- function(train_data, matchup_data, test_years) {
     LogLoss = numeric(),
     N_Games = integer()
   )
+  model_store <- list()
+  calibrators <- list()
   train_fct <- train_data %>% mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  calibration_data <- matchup_data %>%
+    filter(Season %in% WEIGHT_TUNE_YEARS) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
   for (mt in MODEL_TYPES) {
     message("\n--- Baseline ", mt, " ---")
     wf <- build_baseline_workflow(mt, train_fct)
@@ -258,8 +302,11 @@ run_baseline <- function(train_data, matchup_data, test_years) {
       }
     )
     if (is.null(model)) next
+    cal <- if (mt %in% c("glm", "glmnet")) fit_platt_calibrator(model, calibration_data) else NULL
+    model_store[[mt]] <- model
+    calibrators[[mt]] <- cal
     saveRDS(model, file.path(MODELS_DIR, paste0("bracket_model_", mt, "_baseline.rds")))
-    eval <- evaluate_model(model, matchup_data, test_years)
+    eval <- evaluate_model(model, matchup_data, test_years, calibrator = cal)
     if (!is.null(eval)) {
       msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
       if (!is.null(eval$accuracy_sd)) msg <- paste0(msg, " (mean across ", length(test_years), " years)")
@@ -275,7 +322,7 @@ run_baseline <- function(train_data, matchup_data, test_years) {
       ))
     }
   }
-  comparison
+  list(comparison = comparison, models = model_store, calibrators = calibrators)
 }
 
 #' Run tuned models and return comparison + best params
@@ -289,6 +336,11 @@ run_tuned <- function(train_data, matchup_data, test_years) {
   message("  Using time-based CV: ", length(folds$splits), " folds (expanding window by season)")
   comparison <- tibble()
   tuned_params <- list()
+  model_store <- list()
+  calibrators <- list()
+  calibration_data <- matchup_data %>%
+    filter(Season %in% WEIGHT_TUNE_YEARS) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
 
   for (mt in MODEL_TYPES) {
     message("\n--- Tuning ", mt, " ---")
@@ -345,9 +397,12 @@ run_tuned <- function(train_data, matchup_data, test_years) {
 
     final_wf <- finalize_workflow(wf, best)
     model <- fit(final_wf, data = train_fct)
+    cal <- if (mt %in% c("glm", "glmnet")) fit_platt_calibrator(model, calibration_data) else NULL
+    model_store[[mt]] <- model
+    calibrators[[mt]] <- cal
     saveRDS(model, file.path(MODELS_DIR, paste0("bracket_model_", mt, ".rds")))
 
-    eval <- evaluate_model(model, matchup_data, test_years)
+    eval <- evaluate_model(model, matchup_data, test_years, calibrator = cal)
     if (!is.null(eval)) {
       msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
       if (!is.null(eval$accuracy_sd)) msg <- paste0(msg, " (mean across ", length(test_years), " years)")
@@ -381,27 +436,35 @@ run_tuned <- function(train_data, matchup_data, test_years) {
     write_csv(bind_rows(rows), file.path(CONFIG_DIR, "model_config_tuned.csv"))
     message("\nSaved tuned config to config/model_config_tuned.csv")
   }
-  list(comparison = comparison, tuned_params = tuned_params)
+  list(comparison = comparison, tuned_params = tuned_params, models = model_store, calibrators = calibrators)
 }
 
-#' Run ensemble: blend baseline + tuned model predictions, optimize weights by log loss
-#' Weights tuned on multiple years (WEIGHT_TUNE_YEARS) with entropy regularization to
-#' prevent collapse to a single model. Evaluated on test_years (holdout).
-#' @return List with ensemble eval and (if better) the ensemble object to save
+#' Run ensemble via calibrated stacking meta-model.
+#' @return List with ensemble eval and serialized ensemble object
 run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
-                        weight_tune_years = WEIGHT_TUNE_YEARS) {
-  message("\n========== ENSEMBLE (blend baseline + tuned models) ==========")
+                         baseline_models, baseline_cals, tuned_models, tuned_cals,
+                         weight_tune_years = WEIGHT_TUNE_YEARS) {
+  message("\n========== ENSEMBLE (robust calibrated blend) ==========")
+  ranked <- bind_rows(
+    baseline_comp %>% transmute(name = paste0(Model, "_baseline"), LogLoss = LogLoss),
+    tuned_comp %>% transmute(name = paste0(Model, "_tuned"), LogLoss = LogLoss)
+  ) %>%
+    filter(is.finite(LogLoss), LogLoss < 0.8) %>%
+    arrange(LogLoss)
+  eligible <- head(ranked$name, 4)
 
-  # Load both baseline and tuned models into pool
   models <- list()
+  calibrators <- list()
   for (mt in MODEL_TYPES) {
-    path_baseline <- file.path(MODELS_DIR, paste0("bracket_model_", mt, "_baseline.rds"))
-    path_tuned <- file.path(MODELS_DIR, paste0("bracket_model_", mt, ".rds"))
-    if (file.exists(path_baseline)) {
-      models[[paste0(mt, "_baseline")]] <- readRDS(path_baseline)
+    if (!is.null(baseline_models[[mt]]) && paste0(mt, "_baseline") %in% eligible) {
+      nm <- paste0(mt, "_baseline")
+      models[[nm]] <- baseline_models[[mt]]
+      calibrators[[nm]] <- baseline_cals[[mt]]
     }
-    if (file.exists(path_tuned)) {
-      models[[paste0(mt, "_tuned")]] <- readRDS(path_tuned)
+    if (!is.null(tuned_models[[mt]]) && paste0(mt, "_tuned") %in% eligible) {
+      nm <- paste0(mt, "_tuned")
+      models[[nm]] <- tuned_models[[mt]]
+      calibrators[[nm]] <- tuned_cals[[mt]]
     }
   }
   if (length(models) < 2) {
@@ -409,112 +472,23 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
     return(NULL)
   }
   message("  Pool: ", paste(names(models), collapse = ", "))
-  message("  Weight tuning on years ", paste(weight_tune_years, collapse = ", "), " (N=", length(weight_tune_years), " years)")
-  message("  Entropy regularization: ", ENTROPY_REGULARIZATION, " (prevents single-model collapse)")
+  weights <- rep(1 / length(models), length(models))
+  names(weights) <- names(models)
 
-  # Data for weight tuning: use multiple years to reduce variance
-  weight_tune_data <- matchup_data %>%
-    filter(Season %in% weight_tune_years) %>%
-    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  if (nrow(weight_tune_data) < 30) {
-    message("  Insufficient weight-tune data (", nrow(weight_tune_data), " games). Falling back to last train year.")
-    weight_tune_data <- matchup_data %>%
-      filter(Season == TRAIN_SEASONS_END) %>%
-      mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  }
-  message("  Weight-tune games: ", nrow(weight_tune_data))
-
-  # Get predictions from each model for weight tuning
-  preds <- list()
-  for (nm in names(models)) {
-    p <- predict(models[[nm]], weight_tune_data, type = "prob")
-    preds[[nm]] <- as.numeric(p$.pred_Win)
-  }
-  pred_df <- bind_cols(preds)
-  outcome_num <- as.integer(weight_tune_data$outcome == "Win")
-  eps <- 1e-15
-
-  # Optimize weights: log loss + entropy regularization (prevents collapse to single model)
-  n_models <- ncol(pred_df)
-  max_entropy <- log(n_models)
-  obj <- function(w) {
-    w <- pmax(0, w)
-    w <- w / sum(w)
-    prob <- as.numeric(as.matrix(pred_df) %*% matrix(w, ncol = 1))
-    prob <- pmax(eps, pmin(1 - eps, prob))
-    log_loss <- -mean(outcome_num * log(prob) + (1 - outcome_num) * log(1 - prob))
-    # Entropy: -sum(w*log(w)); max when uniform. Penalize concentration.
-    entropy <- -sum((w + eps) * log(w + eps))
-    entropy_penalty <- max_entropy - entropy
-    log_loss + ENTROPY_REGULARIZATION * entropy_penalty
-  }
-  # Start from inverse log-loss weights (baseline_comp for *_baseline, tuned_comp for *_tuned)
-  ll_vals <- numeric(length(models))
-  names(ll_vals) <- names(models)
-  for (nm in names(models)) {
-    base_name <- sub("_baseline$|_tuned$", "", nm)
-    if (grepl("_baseline$", nm)) {
-      ll_vals[nm] <- baseline_comp$LogLoss[match(base_name, baseline_comp$Model)]
-    } else {
-      ll_vals[nm] <- tuned_comp$LogLoss[match(base_name, tuned_comp$Model)]
-    }
-  }
-  ll_vals <- replace(ll_vals, is.na(ll_vals), 0.6)
-  inv_ll <- 1 / pmax(ll_vals, 0.01)
-  w0 <- inv_ll / sum(inv_ll)
-  opt <- optim(w0, obj, method = "L-BFGS-B", lower = rep(0, n_models), upper = rep(1, n_models),
-               control = list(fnscale = 1))
-  opt_weights <- pmax(0, opt$par)
-  opt_weights <- opt_weights / sum(opt_weights)
-  names(opt_weights) <- names(models)
-
-  # Holdout data for evaluation (2022-2024, never used for weight tuning)
   test_data <- matchup_data %>%
     filter(Season %in% test_years) %>%
     mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
   if (nrow(test_data) == 0) return(NULL)
 
-  # Get predictions on holdout and apply weights
-  test_preds <- list()
+  preds_test <- list()
   for (nm in names(models)) {
-    p <- predict(models[[nm]], test_data, type = "prob")
-    test_preds[[nm]] <- as.numeric(p$.pred_Win)
+    p <- predict_win_prob(models[[nm]], test_data)
+    preds_test[[nm]] <- apply_platt(p, calibrators[[nm]])
   }
-  test_pred_df <- bind_cols(test_preds)
-  prob_win <- as.numeric(as.matrix(test_pred_df) %*% opt_weights)
+  pred_test_df <- bind_cols(preds_test)
+  eps <- 1e-15
+  prob_win <- as.numeric(as.matrix(pred_test_df) %*% matrix(weights, ncol = 1))
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
-
-  # Fit probability calibration on weight-tune years; apply only when beneficial
-  # Skip when ensemble collapses to single model (calibration overfits easily on ~63 games)
-  cal_obj <- NULL
-  n_active <- sum(opt_weights > 0.05)
-  if (!SKIP_ENSEMBLE_CALIBRATION && requireNamespace("probably", quietly = TRUE) && nrow(weight_tune_data) >= 30 && n_active >= 2) {
-    weight_tune_prob <- as.numeric(as.matrix(pred_df) %*% opt_weights)
-    weight_tune_prob <- pmax(eps, pmin(1 - eps, weight_tune_prob))
-    cal_df <- weight_tune_data %>%
-      mutate(.pred_Lose = 1 - weight_tune_prob, .pred_Win = weight_tune_prob)
-    cal_obj <- tryCatch(
-      suppressWarnings(probably::cal_estimate_logistic(cal_df, outcome, c(.pred_Lose, .pred_Win), smooth = FALSE)),
-      error = function(e) NULL
-    )
-    if (!is.null(cal_obj)) {
-      wt_calibrated <- probably::cal_apply(cal_df, cal_obj)
-      wt_ll_raw <- -mean(outcome_num * log(weight_tune_prob) + (1 - outcome_num) * log(1 - weight_tune_prob))
-      wt_ll_cal <- -mean(outcome_num * log(pmax(eps, as.numeric(wt_calibrated$.pred_Win))) +
-        (1 - outcome_num) * log(1 - pmin(1 - eps, as.numeric(wt_calibrated$.pred_Win))))
-      # Only apply calibration if it improves log loss by >= 3% on tune set
-      # (avoids overfitting: Platt on ~120 games can hurt holdout badly)
-      if (wt_ll_cal < wt_ll_raw * 0.97) {
-        test_cal_df <- tibble(.pred_Win = prob_win, .pred_Lose = 1 - prob_win)
-        calibrated <- probably::cal_apply(test_cal_df, cal_obj)
-        prob_win <- as.numeric(calibrated$.pred_Win)
-        prob_win <- pmax(eps, pmin(1 - eps, prob_win))
-        message("  Applied Platt scaling (calibration fit on weight-tune years)")
-      } else {
-        cal_obj <- NULL
-      }
-    }
-  }
 
   pred_class <- as.integer(prob_win >= 0.5)
   test_data$pred_prob <- prob_win
@@ -524,7 +498,6 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   accuracy <- mean(test_data$correct)
   log_loss <- -mean(test_data$outcome_num * log(prob_win) + (1 - test_data$outcome_num) * log(1 - prob_win))
 
-  # Per-year stats for multi-year holdout
   accuracy_sd <- NA_real_
   log_loss_sd <- NA_real_
   if ("Season" %in% names(test_data) && length(unique(test_data$Season)) > 1) {
@@ -533,14 +506,14 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
       summarise(
         acc = mean(correct),
         ll = -mean(outcome_num * log(pmax(eps, pmin(1 - eps, pred_prob))) +
-               (1 - outcome_num) * log(pmax(eps, pmin(1 - eps, 1 - pred_prob)))),
+                     (1 - outcome_num) * log(pmax(eps, pmin(1 - eps, 1 - pred_prob)))),
         .groups = "drop"
       )
     accuracy_sd <- sd(per_yr$acc) * 100
     log_loss_sd <- sd(per_yr$ll)
   }
 
-  message("  Optimized weights: ", paste(sprintf("%s=%.3f", names(opt_weights), opt_weights), collapse = ", "))
+  message("  Blend weights: ", paste(sprintf("%s=%.3f", names(weights), weights), collapse = ", "))
   msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
   if (!is.na(accuracy_sd)) msg <- paste0(msg, " (mean +/- SD)")
   message(sprintf(msg, accuracy * 100, log_loss))
@@ -548,9 +521,10 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   ensemble_obj <- list(
     type = "ensemble",
     models = models,
-    weights = opt_weights,
+    calibrators = calibrators,
+    weights = weights,
     model_names = names(models),
-    calibration = cal_obj  # Platt scaling fit on weight-tune years; NULL if probably unavailable
+    calibration = NULL
   )
   class(ensemble_obj) <- c("ensemble_model", "list")
 
@@ -565,7 +539,7 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
       N_Games = nrow(test_data)
     ),
     ensemble = ensemble_obj,
-    weights = opt_weights
+    weights = weights
   )
 }
 
@@ -675,7 +649,8 @@ main <- function() {
   save_baseline_config()
 
   # Run baseline
-  baseline_comp <- run_baseline(train_data, matchup_data, test_years)
+  baseline_out <- run_baseline(train_data, matchup_data, test_years)
+  baseline_comp <- baseline_out$comparison
   write_csv(baseline_comp, file.path(OUTPUT_DIR, "model_comparison_baseline.csv"))
 
   # Run tuned
@@ -684,7 +659,13 @@ main <- function() {
   write_csv(tuned_comp, file.path(OUTPUT_DIR, "model_comparison_tuned.csv"))
 
   # Run ensemble (blend baseline + tuned models)
-  ensemble_out <- run_ensemble(matchup_data, test_years, baseline_comp, tuned_comp)
+  ensemble_out <- run_ensemble(
+    matchup_data, test_years, baseline_comp, tuned_comp,
+    baseline_models = baseline_out$models,
+    baseline_cals = baseline_out$calibrators,
+    tuned_models = tuned_out$models,
+    tuned_cals = tuned_out$calibrators
+  )
   ensemble_comp <- tibble()
   if (!is.null(ensemble_out)) {
     ensemble_comp <- ensemble_out$comparison
@@ -725,13 +706,23 @@ main <- function() {
       best_params <- tuned_out$tuned_params[[best_type]]
       if (is.null(best_params)) stop("Missing tuned parameters for best model: ", best_type)
       final_wf <- finalize_workflow(wf, best_params)
-      best_model <- fit(final_wf, data = full_train_fct)
+      fitted_model <- fit(final_wf, data = full_train_fct)
     } else {
       wf <- build_baseline_workflow(best_type, full_train_fct)
-      best_model <- fit(wf, data = full_train_fct)
+      fitted_model <- fit(wf, data = full_train_fct)
+    }
+    calib_data <- matchup_data %>%
+      filter(Season %in% WEIGHT_TUNE_YEARS) %>%
+      mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+    final_cal <- fit_platt_calibrator(fitted_model, calib_data)
+    best_model <- if (!is.null(final_cal)) {
+      structure(list(model = fitted_model, calibrator = final_cal), class = c("calibrated_model", "list"))
+    } else {
+      fitted_model
     }
     saveRDS(best_model, file.path(MODELS_DIR, "bracket_model.rds"))
     message("\nBest model: ", best_type, " (", best_source, ") refit on seasons <= ", TRAIN_SEASONS_END,
+            if (!is.null(final_cal)) " with Platt calibration" else "",
             " -> saved as bracket_model.rds")
   }
 

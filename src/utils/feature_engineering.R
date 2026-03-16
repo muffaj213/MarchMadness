@@ -559,7 +559,9 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
                               head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                               home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
                               conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
-                              tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL) {
+                              tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
+                              fte_ratings = NULL, evanmiya_metrics = NULL, shooting_style_metrics = NULL,
+                              tourney_location_metrics = NULL) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   games_with_seeds <- tourney_results %>%
@@ -597,6 +599,8 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
       first_four_stats = first_four_stats,
       tourney_history_stats = tourney_history_stats, tourney_h2h = tourney_h2h,
       upset_history = upset_history,
+      fte_ratings = fte_ratings, evanmiya_metrics = evanmiya_metrics,
+      shooting_style_metrics = shooting_style_metrics, tourney_location_metrics = tourney_location_metrics,
       round = row$round
     )
     rows[[i]] <- bind_cols(
@@ -611,6 +615,9 @@ build_matchup_data <- function(tourney_results, seeds, win_pct, points_stats, ke
            sos_diff, rest_diff, conf_tourney_depth_diff, conf_em_diff, quad1_winpct_diff, quad12_winpct_diff, first_four_rest_diff,
            tourney_winpct_diff, deepest_run_diff, tourney_h2h_team_a_winpct, tourney_h2h_games, upset_winpct_diff,
            home_win_rate_diff, away_win_rate_diff, elo_diff, net_diff, wab_diff, barthag_diff, elite_sos_diff,
+           fte_power_diff, injury_rank_diff, roster_rank_diff, evan_killshots_margin_diff,
+           three_share_diff, three_point_mismatch, close2_share_diff, close2_point_mismatch,
+           travel_miles_adv, timezones_adv,
            adjem_diff, adj_off_diff, adj_def_diff, tempo_diff, luck_diff, off_vs_def_adv, adjem_seed_interaction, seed_latewinpct_interaction,
            round_seed_interaction, seed_barthag_interaction, seed_recentmov_interaction)
 }
@@ -634,7 +641,9 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
                                      head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                                      home_away_stats = NULL, resume_stats = NULL, recent_win_pct = NULL, recent_mov = NULL,
                                      conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
-                                     tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL, round = 1L) {
+                                     tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
+                                     fte_ratings = NULL, evanmiya_metrics = NULL, shooting_style_metrics = NULL,
+                                     tourney_location_metrics = NULL, round = 1L) {
   seeds <- seeds %>% mutate(SeedNum = parse_seed_number(Seed))
 
   seed_a <- seeds %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
@@ -809,6 +818,64 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     upset_winpct_diff_val <- ua - ub
   }
 
+  # Additional power/style/travel signals
+  fte_power_diff_val <- 0
+  injury_rank_diff_val <- 0
+  roster_rank_diff_val <- 0
+  evan_killshots_margin_diff_val <- 0
+  three_share_diff_val <- 0
+  three_point_mismatch_val <- 0
+  close2_share_diff_val <- 0
+  close2_point_mismatch_val <- 0
+  travel_miles_adv_val <- 0
+  timezones_adv_val <- 0
+  if (!is.null(fte_ratings) && nrow(fte_ratings) > 0) {
+    fa <- fte_ratings %>% filter(Season == season, TeamID == team_a) %>% pull(fte_power_rating)
+    fb <- fte_ratings %>% filter(Season == season, TeamID == team_b) %>% pull(fte_power_rating)
+    fa <- if (length(fa) > 0 && !is.na(fa[1])) fa[1] else 0
+    fb <- if (length(fb) > 0 && !is.na(fb[1])) fb[1] else 0
+    fte_power_diff_val <- fa - fb
+  }
+  if (!is.null(evanmiya_metrics) && nrow(evanmiya_metrics) > 0) {
+    ea <- evanmiya_metrics %>% filter(Season == season, TeamID == team_a)
+    eb <- evanmiya_metrics %>% filter(Season == season, TeamID == team_b)
+    inj_a <- if (nrow(ea) > 0 && "injury_rank" %in% names(ea) && !is.na(ea$injury_rank[1])) ea$injury_rank[1] else 180
+    inj_b <- if (nrow(eb) > 0 && "injury_rank" %in% names(eb) && !is.na(eb$injury_rank[1])) eb$injury_rank[1] else 180
+    ros_a <- if (nrow(ea) > 0 && "roster_rank" %in% names(ea) && !is.na(ea$roster_rank[1])) ea$roster_rank[1] else 180
+    ros_b <- if (nrow(eb) > 0 && "roster_rank" %in% names(eb) && !is.na(eb$roster_rank[1])) eb$roster_rank[1] else 180
+    ksm_a <- if (nrow(ea) > 0 && "evan_killshots_margin" %in% names(ea) && !is.na(ea$evan_killshots_margin[1])) ea$evan_killshots_margin[1] else 0
+    ksm_b <- if (nrow(eb) > 0 && "evan_killshots_margin" %in% names(eb) && !is.na(eb$evan_killshots_margin[1])) eb$evan_killshots_margin[1] else 0
+    injury_rank_diff_val <- inj_b - inj_a
+    roster_rank_diff_val <- ros_b - ros_a
+    evan_killshots_margin_diff_val <- ksm_a - ksm_b
+  }
+  if (!is.null(shooting_style_metrics) && nrow(shooting_style_metrics) > 0) {
+    sa <- shooting_style_metrics %>% filter(Season == season, TeamID == team_a)
+    sb <- shooting_style_metrics %>% filter(Season == season, TeamID == team_b)
+    a_three <- if (nrow(sa) > 0 && "threes_share" %in% names(sa) && !is.na(sa$threes_share[1])) sa$threes_share[1] else 35
+    b_three <- if (nrow(sb) > 0 && "threes_share" %in% names(sb) && !is.na(sb$threes_share[1])) sb$threes_share[1] else 35
+    a_three_d <- if (nrow(sa) > 0 && "threes_d_share" %in% names(sa) && !is.na(sa$threes_d_share[1])) sa$threes_d_share[1] else 35
+    b_three_d <- if (nrow(sb) > 0 && "threes_d_share" %in% names(sb) && !is.na(sb$threes_d_share[1])) sb$threes_d_share[1] else 35
+    a_close2 <- if (nrow(sa) > 0 && "close_twos_share" %in% names(sa) && !is.na(sa$close_twos_share[1])) sa$close_twos_share[1] else 35
+    b_close2 <- if (nrow(sb) > 0 && "close_twos_share" %in% names(sb) && !is.na(sb$close_twos_share[1])) sb$close_twos_share[1] else 35
+    a_close2_d <- if (nrow(sa) > 0 && "close_twos_d_share" %in% names(sa) && !is.na(sa$close_twos_d_share[1])) sa$close_twos_d_share[1] else 35
+    b_close2_d <- if (nrow(sb) > 0 && "close_twos_d_share" %in% names(sb) && !is.na(sb$close_twos_d_share[1])) sb$close_twos_d_share[1] else 35
+    three_share_diff_val <- a_three - b_three
+    close2_share_diff_val <- a_close2 - b_close2
+    three_point_mismatch_val <- (a_three - b_three_d) - (b_three - a_three_d)
+    close2_point_mismatch_val <- (a_close2 - b_close2_d) - (b_close2 - a_close2_d)
+  }
+  if (!is.null(tourney_location_metrics) && nrow(tourney_location_metrics) > 0) {
+    la <- tourney_location_metrics %>% filter(Season == season, TeamID == team_a, round == round_num)
+    lb <- tourney_location_metrics %>% filter(Season == season, TeamID == team_b, round == round_num)
+    miles_a <- if (nrow(la) > 0 && "travel_miles" %in% names(la) && !is.na(la$travel_miles[1])) la$travel_miles[1] else 0
+    miles_b <- if (nrow(lb) > 0 && "travel_miles" %in% names(lb) && !is.na(lb$travel_miles[1])) lb$travel_miles[1] else 0
+    tz_a <- if (nrow(la) > 0 && "timezones_crossed" %in% names(la) && !is.na(la$timezones_crossed[1])) la$timezones_crossed[1] else 0
+    tz_b <- if (nrow(lb) > 0 && "timezones_crossed" %in% names(lb) && !is.na(lb$timezones_crossed[1])) lb$timezones_crossed[1] else 0
+    travel_miles_adv_val <- miles_b - miles_a
+    timezones_adv_val <- tz_b - tz_a
+  }
+
   out <- tibble(
     round = round_num,
     seed_diff = seed_diff,
@@ -843,6 +910,16 @@ compute_matchup_features <- function(team_a, team_b, season, seeds, win_pct, poi
     wab_diff = 0,
     barthag_diff = 0,
     elite_sos_diff = 0,
+    fte_power_diff = fte_power_diff_val,
+    injury_rank_diff = injury_rank_diff_val,
+    roster_rank_diff = roster_rank_diff_val,
+    evan_killshots_margin_diff = evan_killshots_margin_diff_val,
+    three_share_diff = three_share_diff_val,
+    three_point_mismatch = three_point_mismatch_val,
+    close2_share_diff = close2_share_diff_val,
+    close2_point_mismatch = close2_point_mismatch_val,
+    travel_miles_adv = travel_miles_adv_val,
+    timezones_adv = timezones_adv_val,
     adjem_diff = 0,
     adj_off_diff = 0,
     adj_def_diff = 0,
