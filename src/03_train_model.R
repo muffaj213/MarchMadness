@@ -100,12 +100,9 @@ build_baseline_workflow <- function(model_type, matchup_data) {
   if (length(avail) == 0) stop("No feature columns found in matchup_data")
   formula_str <- paste("outcome ~", paste(avail, collapse = " + "))
 
-  recipe <- recipe(as.formula(formula_str), data = matchup_data) %>%
+  recipe <- recipe(as.formula(formula_str), data = matchup_data, case_weights = case_wt) %>%
     step_zv(all_predictors()) %>%
     step_normalize(all_predictors())
-  if ("case_wt" %in% names(matchup_data)) {
-    recipe <- recipe %>% update_role(case_wt, new_role = "case_weights")
-  }
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = 0, mixture = 0) %>% set_engine("glm"),
@@ -136,12 +133,9 @@ build_tuned_workflow <- function(model_type, matchup_data) {
   if (length(avail) == 0) stop("No feature columns found in matchup_data")
   formula_str <- paste("outcome ~", paste(avail, collapse = " + "))
 
-  recipe <- recipe(as.formula(formula_str), data = matchup_data) %>%
+  recipe <- recipe(as.formula(formula_str), data = matchup_data, case_weights = case_wt) %>%
     step_zv(all_predictors()) %>%
     step_normalize(all_predictors())
-  if ("case_wt" %in% names(matchup_data)) {
-    recipe <- recipe %>% update_role(case_wt, new_role = "case_weights")
-  }
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = tune(), mixture = tune()) %>% set_engine("glmnet"),
@@ -671,7 +665,7 @@ main <- function() {
   # Drop rows with invalid outcome (cannot train)
   matchup_data <- matchup_data %>%
     filter(!is.na(outcome) & !is.infinite(outcome))
-  matchup_data$case_wt <- build_case_weights(matchup_data)
+  matchup_data$case_wt <- hardhat::importance_weights(build_case_weights(matchup_data))
   # Impute NA/Inf in features (fix at source preferred; this is safety net for edge cases)
   for (col in feat_cols) {
     if (col %in% names(matchup_data)) {
