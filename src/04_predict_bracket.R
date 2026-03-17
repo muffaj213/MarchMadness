@@ -387,10 +387,14 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
                             n_sims = 1000L, seed = 2026L, use_projected_output = FALSE,
                             use_seed_round_priors = FALSE) {
   source(here("src", "utils", "bracket_logic.R"), local = TRUE)
-  set.seed(seed)
-  sims <- vector("list", n_sims)
-  champs <- integer(n_sims)
-  for (i in seq_len(n_sims)) {
+  n_workers_env <- suppressWarnings(as.integer(Sys.getenv("MONTE_CARLO_WORKERS", unset = "0")))
+  detected_cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
+  if (is.na(detected_cores) || detected_cores < 1L) detected_cores <- 1L
+  n_workers_auto <- max(1L, detected_cores - 1L)
+  n_workers <- if (is.na(n_workers_env) || n_workers_env <= 0L) n_workers_auto else n_workers_env
+  n_workers <- max(1L, min(as.integer(n_workers), as.integer(n_sims)))
+
+  simulate_one <- function(sim_id) {
     sim <- simulate_bracket(
       season = season,
       slots_df = slots_season,
@@ -422,10 +426,51 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
       deterministic = FALSE,
       use_seed_round_priors = use_seed_round_priors
     )
-    sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
-    champs[[i]] <- sim$champion
-    if (i %% 500 == 0 || i == n_sims) message("  MC sim ", i, " / ", n_sims)
+    list(
+      game_results = sim$game_results %>% mutate(sim_id = sim_id),
+      champion = sim$champion
+    )
   }
+
+  message("Monte Carlo workers: ", n_workers, " (set MONTE_CARLO_WORKERS to override)")
+  if (n_workers <= 1L) {
+    set.seed(seed)
+    sim_out <- vector("list", n_sims)
+    for (i in seq_len(n_sims)) {
+      sim_out[[i]] <- simulate_one(i)
+      if (i %% 250 == 0 || i == n_sims) message("  MC sim ", i, " / ", n_sims)
+    }
+  } else {
+    project_root <- here::here()
+    sim_ids <- seq_len(n_sims)
+    n_chunks <- min(n_sims, n_workers * 2L)
+    sim_chunks <- split(sim_ids, cut(sim_ids, breaks = n_chunks, labels = FALSE))
+    message("Monte Carlo chunks: ", length(sim_chunks))
+
+    cl <- parallel::makeCluster(n_workers)
+    on.exit(try(parallel::stopCluster(cl), silent = TRUE), add = TRUE)
+    parallel::clusterSetRNGStream(cl, iseed = seed)
+    parallel::clusterExport(
+      cl,
+      varlist = c("project_root", "season", "slots_season", "seeds_season", "data", "use_seed_round_priors"),
+      envir = environment()
+    )
+    parallel::clusterEvalQ(cl, {
+      library(dplyr)
+      library(tidyr)
+      source(file.path(project_root, "src", "utils", "feature_engineering.R"))
+      source(file.path(project_root, "src", "utils", "bracket_logic.R"))
+      NULL
+    })
+    parallel::clusterExport(cl, varlist = c("simulate_one"), envir = environment())
+    chunk_results <- parallel::parLapply(cl, sim_chunks, function(ids) {
+      lapply(ids, simulate_one)
+    })
+    sim_out <- unlist(chunk_results, recursive = FALSE)
+  }
+
+  sims <- lapply(sim_out, `[[`, "game_results")
+  champs <- as.integer(vapply(sim_out, function(x) x$champion, integer(1)))
   sim_games <- bind_rows(sims)
   slot_odds <- sim_games %>%
     count(slot, round, team_id = winner, name = "wins") %>%
@@ -456,7 +501,7 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
 }
 
 main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE,
-                 run_monte_carlo_output = TRUE, monte_carlo_sims = 5000L, monte_carlo_seed = 2026L,
+                 run_monte_carlo_output = TRUE, monte_carlo_sims = 1000L, monte_carlo_seed = 2026L,
                  bracket_strategy = BRACKET_STRATEGY, use_seed_round_priors = BRACKET_USE_SEED_PRIORS) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
