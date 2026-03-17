@@ -11,6 +11,11 @@ source(here("src", "utils", "team_id_consolidation.R"))
 
 BACKTEST_SEASONS <- c(2018L, 2019L, 2021L, 2022L, 2023L, 2024L)
 ROUND_POINTS <- c(`1` = 10L, `2` = 20L, `3` = 40L, `4` = 80L, `5` = 160L, `6` = 320L)
+LEAKAGE_GUARD <- TRUE
+LEAKAGE_GUARD_SEASONS <- c(2024L)
+LEAKAGE_MIN_POINT_DROP <- 200L
+LEAKAGE_MIN_R1_DROP <- 4L
+USE_TOURNEY_LOCATION_FEATURES <- FALSE
 
 read_tourney_results <- function() {
   path_ext <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
@@ -280,7 +285,7 @@ score_bracket_slot_accurate <- function(pred_games, actual_slots) {
   )
 }
 
-fit_rolling_model <- function(matchup_data, test_season) {
+fit_rolling_model <- function(matchup_data, test_season, shuffle_labels = FALSE, shuffle_seed = 42L) {
   train <- matchup_data %>%
     filter(Season < test_season) %>%
     filter(!is.na(outcome) & !is.infinite(outcome))
@@ -291,6 +296,11 @@ fit_rolling_model <- function(matchup_data, test_season) {
   for (col in feature_cols) {
     bad <- is.na(train[[col]]) | is.infinite(train[[col]])
     if (any(bad)) train[[col]][bad] <- 0
+  }
+
+  if (isTRUE(shuffle_labels)) {
+    set.seed(as.integer(shuffle_seed))
+    train$outcome <- sample(train$outcome)
   }
 
   train <- train %>%
@@ -312,6 +322,19 @@ fit_rolling_model <- function(matchup_data, test_season) {
 
   wf <- workflow() %>% add_recipe(rec) %>% add_model(spec)
   fit(wf, data = train)
+}
+
+compute_round1_correct <- function(pred_games, actual_slots) {
+  actual_slots %>%
+    filter(round == 1L) %>%
+    select(slot, winner) %>%
+    left_join(
+      pred_games %>% filter(round == 1L) %>% select(slot, pred_winner = winner),
+      by = "slot"
+    ) %>%
+    summarise(v = sum(winner == pred_winner, na.rm = TRUE)) %>%
+    pull(v) %>%
+    as.integer()
 }
 
 simulate_model_bracket <- function(data, season, model, seeds_override = NULL, slots_override = NULL) {
@@ -424,8 +447,18 @@ main <- function(seasons = BACKTEST_SEASONS) {
   matchup_data <- read_csv(file.path(PROC_DIR, "matchup_data.csv"), show_col_types = FALSE)
   tourney_results <- read_tourney_results()
 
+  if (!isTRUE(USE_TOURNEY_LOCATION_FEATURES)) {
+    # Tournament locations file includes path-dependent round coverage and can
+    # leak realized advancement when used in retrospective backtests.
+    if ("travel_miles_adv" %in% names(matchup_data)) matchup_data$travel_miles_adv <- 0
+    if ("timezones_adv" %in% names(matchup_data)) matchup_data$timezones_adv <- 0
+    data$tourney_location_metrics <- tibble()
+    message("Location features disabled for rolling backtest (leakage safeguard).")
+  }
+
   by_round_rows <- list()
   season_rows <- list()
+  leakage_rows <- list()
 
   for (season in seasons) {
     message("Rolling fit for season ", season, " (train on seasons <", season, ")")
@@ -456,6 +489,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
     scored_model <- score_bracket_slot_accurate(model_out$game_results, actual_slots)
     scored_chalk <- score_bracket_slot_accurate(chalk_out$game_results, actual_slots)
     max_points <- sum(c(32, 16, 8, 4, 2, 1) * as.integer(ROUND_POINTS[c("1", "2", "3", "4", "5", "6")]))
+    r1_model <- compute_round1_correct(model_out$game_results, actual_slots)
 
     by_round_rows[[length(by_round_rows) + 1]] <- scored_model$round_breakdown %>%
       mutate(Season = season, Method = "model", .before = 1)
@@ -492,6 +526,46 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
       Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
     )
+
+    if (isTRUE(LEAKAGE_GUARD) && season %in% LEAKAGE_GUARD_SEASONS) {
+      message("Leakage guard: shuffled-label control for season ", season)
+      shuffled_model <- fit_rolling_model(
+        matchup_data,
+        season,
+        shuffle_labels = TRUE,
+        shuffle_seed = 1000L + season
+      )
+      shuffled_out <- simulate_model_bracket(
+        data,
+        season,
+        shuffled_model,
+        seeds_override = seeds_season,
+        slots_override = slots_season
+      )
+      scored_shuffled <- score_bracket_slot_accurate(shuffled_out$game_results, actual_slots)
+      r1_shuffled <- compute_round1_correct(shuffled_out$game_results, actual_slots)
+      point_drop <- as.integer(scored_model$total_points - scored_shuffled$total_points)
+      r1_drop <- as.integer(r1_model - r1_shuffled)
+
+      leakage_rows[[length(leakage_rows) + 1]] <- tibble(
+        Season = season,
+        Baseline_Points = as.integer(scored_model$total_points),
+        Shuffled_Points = as.integer(scored_shuffled$total_points),
+        Point_Drop = point_drop,
+        Baseline_R1_Correct = r1_model,
+        Shuffled_R1_Correct = r1_shuffled,
+        R1_Drop = r1_drop
+      )
+
+      if (point_drop < LEAKAGE_MIN_POINT_DROP && r1_drop < LEAKAGE_MIN_R1_DROP) {
+        stop(
+          "Leakage guard FAILED for season ", season, ": shuffled labels were too strong (",
+          "point_drop=", point_drop, ", r1_drop=", r1_drop, "). ",
+          "Expected at least one of: point_drop >= ", LEAKAGE_MIN_POINT_DROP,
+          " or r1_drop >= ", LEAKAGE_MIN_R1_DROP, "."
+        )
+      }
+    }
   }
 
   by_round <- bind_rows(by_round_rows) %>% arrange(Method, Season, round)
@@ -512,6 +586,9 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
   write_csv(by_round, file.path(OUTPUT_DIR, "backtest_rolling_round_breakdown.csv"))
   write_csv(by_season, file.path(OUTPUT_DIR, "backtest_rolling_bracket_scores.csv"))
+  if (length(leakage_rows) > 0) {
+    write_csv(bind_rows(leakage_rows), file.path(OUTPUT_DIR, "backtest_rolling_leakage_guard.csv"))
+  }
 
   report <- c(
     "# Rolling Bracket Backtest",
@@ -569,6 +646,15 @@ main <- function(seasons = BACKTEST_SEASONS) {
       by_season %>% filter(Season == 2023L, Method == "model") %>% pull(Correct_Games) %>% first(),
       " | Chalk correct games: ",
       by_season %>% filter(Season == 2023L, Method == "chalk") %>% pull(Correct_Games) %>% first()
+    ),
+    "",
+    "## Leakage Guard",
+    "",
+    paste0(
+      "- Enabled: ", LEAKAGE_GUARD,
+      "; Seasons checked: ", paste(LEAKAGE_GUARD_SEASONS, collapse = ", "),
+      "; Thresholds -> point_drop >= ", LEAKAGE_MIN_POINT_DROP,
+      " OR r1_drop >= ", LEAKAGE_MIN_R1_DROP
     ),
     ""
   )
