@@ -26,3 +26,9 @@ RAW_ATOZIYE_DIR <- here::here("data", "raw_atoziye")
 
 # File paths (for scripts that need specific files)
 TEAM_ID_MASTER_PATH <- file.path(PROC_DIR, "team_id_master.csv")
+
+# Bracket generation strategy.
+# - "deterministic": single-pass argmax game picks
+# - "monte_carlo_optimal": optimize bracket from Monte Carlo slot odds
+BRACKET_STRATEGY <- tolower(trimws(Sys.getenv("BRACKET_STRATEGY", unset = "monte_carlo_optimal")))
+BRACKET_USE_SEED_PRIORS <- tolower(trimws(Sys.getenv("BRACKET_USE_SEED_PRIORS", unset = "false"))) %in% c("true", "1", "yes")

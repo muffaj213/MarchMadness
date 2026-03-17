@@ -20,10 +20,12 @@ USE_NISHAA_FEATURES <- FALSE
 USE_MINIMAL_FEATURE_SET <- TRUE
 MINIMAL_FEATURE_COLS <- c(
   "round", "seed_diff", "seed_diff_sq", "seed_sum",
-  "is_upset_matchup", "upset_seed_gap", "round_seed_interaction"
+  "is_upset_matchup", "upset_seed_gap", "round_seed_interaction",
+  "upset_winpct_diff", "tourney_winpct_diff", "rest_diff", "h2h_team_a_winpct"
 )
 FEATURE_PROFILE <- tolower(trimws(Sys.getenv("ROLLING_FEATURE_PROFILE", unset = "minimal")))
-USE_SEED_ROUND_PRIORS <- tolower(trimws(Sys.getenv("ROLLING_USE_SEED_PRIORS", unset = "true"))) %in% c("true", "1", "yes")
+USE_SEED_ROUND_PRIORS <- tolower(trimws(Sys.getenv("ROLLING_USE_SEED_PRIORS", unset = "false"))) %in% c("true", "1", "yes")
+ROLLING_MC_SIMS <- as.integer(Sys.getenv("ROLLING_MC_SIMS", unset = "1000"))
 
 read_tourney_results <- function() {
   path_ext <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
@@ -345,7 +347,23 @@ compute_round1_correct <- function(pred_games, actual_slots) {
     as.integer()
 }
 
-simulate_model_bracket <- function(data, season, model, seeds_override = NULL, slots_override = NULL) {
+count_predicted_upsets <- function(pred_games, seeds_season) {
+  if (nrow(pred_games) == 0 || nrow(seeds_season) == 0) return(0L)
+  seeds_num <- seeds_season %>%
+    mutate(SeedNum = readr::parse_number(as.character(Seed))) %>%
+    select(TeamID, SeedNum)
+  pred_games %>%
+    left_join(seeds_num %>% rename(winner = TeamID, winner_seed = SeedNum), by = "winner") %>%
+    left_join(seeds_num %>% rename(team_a = TeamID, seed_a = SeedNum), by = "team_a") %>%
+    left_join(seeds_num %>% rename(team_b = TeamID, seed_b = SeedNum), by = "team_b") %>%
+    mutate(opp_seed = if_else(winner == team_a, seed_b, seed_a)) %>%
+    summarise(n = sum(!is.na(winner_seed) & !is.na(opp_seed) & winner_seed > opp_seed, na.rm = TRUE)) %>%
+    pull(n) %>%
+    as.integer()
+}
+
+simulate_model_bracket <- function(data, season, model, seeds_override = NULL, slots_override = NULL,
+                                   use_seed_round_priors = USE_SEED_ROUND_PRIORS) {
   seeds_season <- if (is.null(seeds_override)) {
     data$seeds %>% filter(Season == season)
   } else {
@@ -371,7 +389,7 @@ simulate_model_bracket <- function(data, season, model, seeds_override = NULL, s
     evanmiya_metrics = data$evanmiya_metrics,
     shooting_style_metrics = data$shooting_style_metrics,
     tourney_location_metrics = data$tourney_location_metrics,
-    seed_round_priors = if (isTRUE(USE_SEED_ROUND_PRIORS)) data$seed_round_priors else tibble(),
+    seed_round_priors = if (isTRUE(use_seed_round_priors)) data$seed_round_priors else tibble(),
     head_to_head = data$head_to_head,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
@@ -382,7 +400,66 @@ simulate_model_bracket <- function(data, season, model, seeds_override = NULL, s
     tourney_history_stats = data$tourney_history_stats,
     tourney_h2h = data$tourney_h2h,
     upset_history = data$upset_history,
-    deterministic = TRUE
+    deterministic = TRUE,
+    use_seed_round_priors = use_seed_round_priors
+  )
+}
+
+simulate_model_optimal_bracket <- function(data, season, model, seeds_override = NULL, slots_override = NULL,
+                                           n_sims = ROLLING_MC_SIMS,
+                                           use_seed_round_priors = USE_SEED_ROUND_PRIORS) {
+  seeds_season <- if (is.null(seeds_override)) {
+    data$seeds %>% filter(Season == season)
+  } else {
+    seeds_override
+  }
+  if (nrow(seeds_season) == 0) stop("No seeds found for season ", season)
+  slots_season <- if (is.null(slots_override)) get_slots_for_season(season, data$slots) else slots_override
+
+  sims <- vector("list", n_sims)
+  for (i in seq_len(n_sims)) {
+    sim <- simulate_bracket(
+      season = season,
+      slots_df = slots_season,
+      seeds_df = seeds_season,
+      model = model,
+      win_pct = data$win_pct,
+      points_stats = data$points_stats,
+      kenpom_stats = data$kenpom_stats,
+      late_win_pct = data$late_win_pct,
+      recent_win_pct = data$recent_win_pct,
+      recent_mov = data$recent_mov,
+      home_away_stats = data$home_away_stats,
+      resume_stats = data$resume_stats,
+      fte_ratings = data$fte_ratings,
+      evanmiya_metrics = data$evanmiya_metrics,
+      shooting_style_metrics = data$shooting_style_metrics,
+      tourney_location_metrics = data$tourney_location_metrics,
+      seed_round_priors = if (isTRUE(use_seed_round_priors)) data$seed_round_priors else tibble(),
+      head_to_head = data$head_to_head,
+      sos_stats = data$sos_stats,
+      rest_stats = data$rest_stats,
+      conf_tourney_stats = data$conf_tourney_stats,
+      conference_stats = data$conference_stats,
+      quadrant_stats = data$quadrant_stats,
+      first_four_stats = data$first_four_stats,
+      tourney_history_stats = data$tourney_history_stats,
+      tourney_h2h = data$tourney_h2h,
+      upset_history = data$upset_history,
+      deterministic = FALSE,
+      use_seed_round_priors = use_seed_round_priors
+    )
+    sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
+  }
+  slot_odds <- bind_rows(sims) %>%
+    count(slot, round, team_id = winner, name = "wins") %>%
+    mutate(win_rate = wins / n_sims)
+  select_optimal_bracket(
+    season = season,
+    slots_df = slots_season,
+    seeds_df = seeds_season,
+    slot_odds = slot_odds,
+    round_points = ROUND_POINTS
   )
 }
 
@@ -458,7 +535,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
   data_orig <- data
   matchup_orig <- matchup_data
   profile <- FEATURE_PROFILE
-  valid_profiles <- c("full", "no_nishaa", "minimal", "kenpom_only", "resume_only", "fte_evan_shooting_only")
+  valid_profiles <- c("full", "full_with_upset", "no_nishaa", "minimal", "kenpom_only", "resume_only", "fte_evan_shooting_only")
   if (!(profile %in% valid_profiles)) {
     stop("Unknown ROLLING_FEATURE_PROFILE='", profile, "'. Valid: ", paste(valid_profiles, collapse = ", "))
   }
@@ -481,7 +558,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
   fte_evan_shooting_cols <- intersect(names(matchup_data), c("fte_power_diff", "injury_rank_diff", "roster_rank_diff", "evan_killshots_margin_diff", "three_share_diff", "three_point_mismatch", "close2_share_diff", "close2_point_mismatch"))
 
   # Base for ablations: zero all external columns and clear external tables.
-  if (profile != "full") {
+  if (!(profile %in% c("full", "full_with_upset"))) {
     if (length(nishaa_feature_cols) > 0) {
       for (col in nishaa_feature_cols) matchup_data[[col]] <- 0
     }
@@ -533,6 +610,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
   by_round_rows <- list()
   season_rows <- list()
   leakage_rows <- list()
+  upset_rows <- list()
 
   for (season in seasons) {
     message("Rolling fit for season ", season, " (train on seasons <", season, ")")
@@ -557,16 +635,39 @@ main <- function(seasons = BACKTEST_SEASONS) {
       seeds_override = seeds_season,
       slots_override = slots_season
     )
+    model_optimal_out <- simulate_model_optimal_bracket(
+      data,
+      season,
+      rolling_model,
+      seeds_override = seeds_season,
+      slots_override = slots_season,
+      n_sims = ROLLING_MC_SIMS
+    )
+    model_optimal_no_priors_out <- simulate_model_optimal_bracket(
+      data,
+      season,
+      rolling_model,
+      seeds_override = seeds_season,
+      slots_override = slots_season,
+      n_sims = ROLLING_MC_SIMS,
+      use_seed_round_priors = FALSE
+    )
     chalk_out <- simulate_chalk_bracket(season, seeds_season, slots_season)
 
     scoring_mode <- "slot_accurate"
     scored_model <- score_bracket_slot_accurate(model_out$game_results, actual_slots)
+    scored_model_optimal <- score_bracket_slot_accurate(model_optimal_out$game_results, actual_slots)
+    scored_model_optimal_no_priors <- score_bracket_slot_accurate(model_optimal_no_priors_out$game_results, actual_slots)
     scored_chalk <- score_bracket_slot_accurate(chalk_out$game_results, actual_slots)
     max_points <- sum(c(32, 16, 8, 4, 2, 1) * as.integer(ROUND_POINTS[c("1", "2", "3", "4", "5", "6")]))
     r1_model <- compute_round1_correct(model_out$game_results, actual_slots)
 
     by_round_rows[[length(by_round_rows) + 1]] <- scored_model$round_breakdown %>%
       mutate(Season = season, Method = "model", .before = 1)
+    by_round_rows[[length(by_round_rows) + 1]] <- scored_model_optimal$round_breakdown %>%
+      mutate(Season = season, Method = "model_optimal", .before = 1)
+    by_round_rows[[length(by_round_rows) + 1]] <- scored_model_optimal_no_priors$round_breakdown %>%
+      mutate(Season = season, Method = "model_optimal_no_priors", .before = 1)
     by_round_rows[[length(by_round_rows) + 1]] <- scored_chalk$round_breakdown %>%
       mutate(Season = season, Method = "chalk", .before = 1)
 
@@ -587,6 +688,36 @@ main <- function(seasons = BACKTEST_SEASONS) {
     )
     season_rows[[length(season_rows) + 1]] <- tibble(
       Season = season,
+      Method = "model_optimal",
+      Scoring_Mode = scoring_mode,
+      Train_Through = season - 1L,
+      Correct_Games = scored_model_optimal$total_correct,
+      Total_Games = 63L,
+      Total_Points = scored_model_optimal$total_points,
+      Max_Points = max_points,
+      Points_Pct = scored_model_optimal$total_points / max_points,
+      Champion_Pick = model_optimal_out$champion
+    ) %>% mutate(
+      Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
+      Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
+    )
+    season_rows[[length(season_rows) + 1]] <- tibble(
+      Season = season,
+      Method = "model_optimal_no_priors",
+      Scoring_Mode = scoring_mode,
+      Train_Through = season - 1L,
+      Correct_Games = scored_model_optimal_no_priors$total_correct,
+      Total_Games = 63L,
+      Total_Points = scored_model_optimal_no_priors$total_points,
+      Max_Points = max_points,
+      Points_Pct = scored_model_optimal_no_priors$total_points / max_points,
+      Champion_Pick = model_optimal_no_priors_out$champion
+    ) %>% mutate(
+      Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
+      Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
+    )
+    season_rows[[length(season_rows) + 1]] <- tibble(
+      Season = season,
       Method = "chalk",
       Scoring_Mode = scoring_mode,
       Train_Through = NA_integer_,
@@ -599,6 +730,17 @@ main <- function(seasons = BACKTEST_SEASONS) {
     ) %>% mutate(
       Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
       Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
+    )
+
+    upset_rows[[length(upset_rows) + 1]] <- tibble(
+      Season = season,
+      Method = c("model", "model_optimal", "model_optimal_no_priors", "chalk"),
+      Predicted_Upsets = c(
+        count_predicted_upsets(model_out$game_results, seeds_season),
+        count_predicted_upsets(model_optimal_out$game_results, seeds_season),
+        count_predicted_upsets(model_optimal_no_priors_out$game_results, seeds_season),
+        count_predicted_upsets(chalk_out$game_results, seeds_season)
+      )
     )
 
     if (isTRUE(LEAKAGE_GUARD) && profile != "minimal" && season %in% LEAKAGE_GUARD_SEASONS) {
@@ -644,6 +786,10 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
   by_round <- bind_rows(by_round_rows) %>% arrange(Method, Season, round)
   by_season <- bind_rows(season_rows) %>% arrange(Method, Season)
+  upset_by_season <- bind_rows(upset_rows) %>% arrange(Method, Season)
+  upset_overall <- upset_by_season %>%
+    group_by(Method) %>%
+    summarise(Mean_Predicted_Upsets = mean(Predicted_Upsets), .groups = "drop")
   overall <- by_season %>%
     group_by(Method) %>%
     summarise(
@@ -660,6 +806,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
   write_csv(by_round, file.path(OUTPUT_DIR, "backtest_rolling_round_breakdown.csv"))
   write_csv(by_season, file.path(OUTPUT_DIR, "backtest_rolling_bracket_scores.csv"))
+  write_csv(upset_by_season, file.path(OUTPUT_DIR, "backtest_rolling_upset_analysis.csv"))
   if (length(leakage_rows) > 0) {
     write_csv(bind_rows(leakage_rows), file.path(OUTPUT_DIR, "backtest_rolling_leakage_guard.csv"))
   }
@@ -670,10 +817,11 @@ main <- function(seasons = BACKTEST_SEASONS) {
     paste0("Backtest seasons: ", paste(seasons, collapse = ", ")),
     "Method: strict out-of-sample rolling fit per season (train only on seasons before test year).",
     "Scoring: slot-accurate ESPN-style (exact slot winner required).",
-    "Comparisons: rolling model vs chalk baseline.",
+    "Comparisons: rolling model (deterministic), model_optimal (Monte Carlo expected-points), model_optimal_no_priors, and chalk baseline.",
     "Model: xgboost baseline spec.",
     paste0("Feature profile: ", profile),
     paste0("Seed-round priors enabled: ", USE_SEED_ROUND_PRIORS),
+    paste0("Monte Carlo sims per season for model_optimal: ", ROLLING_MC_SIMS),
     "Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).",
     "",
     "## Season Scores",
@@ -701,6 +849,12 @@ main <- function(seasons = BACKTEST_SEASONS) {
       sprintf("%.1f", overall$Total_Points), " / ", sprintf("%.0f", overall$Max_Points),
       " points (", sprintf("%.2f%%", 100 * overall$Points_Pct), ")"
     ),
+    "",
+    "## Upset Analysis",
+    "",
+    "| Method | Mean Predicted Upsets |",
+    "|---|---:|",
+    paste0("| ", upset_overall$Method, " | ", sprintf("%.2f", upset_overall$Mean_Predicted_Upsets), " |"),
     "",
     "## Scoring Mode Notes",
     "",
@@ -738,6 +892,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
   message("Saved output/backtest_rolling_bracket_scores.csv")
   message("Saved output/backtest_rolling_round_breakdown.csv")
+  message("Saved output/backtest_rolling_upset_analysis.csv")
   message("Saved output/BRACKET_BACKTEST_ROLLING.md")
 }
 

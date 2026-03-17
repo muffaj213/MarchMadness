@@ -384,7 +384,8 @@ SEEDS_2025_PATH <- file.path(BRACKET_DIR, "seeds_68team_2025.csv")
 #' @param n_sims Number of bracket simulations
 #' @param seed RNG seed for reproducibility
 run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
-                            n_sims = 1000L, seed = 2026L, use_projected_output = FALSE) {
+                            n_sims = 1000L, seed = 2026L, use_projected_output = FALSE,
+                            use_seed_round_priors = FALSE) {
   source(here("src", "utils", "bracket_logic.R"), local = TRUE)
   set.seed(seed)
   sims <- vector("list", n_sims)
@@ -418,7 +419,8 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
       tourney_history_stats = data$tourney_history_stats,
       tourney_h2h = data$tourney_h2h,
       upset_history = data$upset_history,
-      deterministic = FALSE
+      deterministic = FALSE,
+      use_seed_round_priors = use_seed_round_priors
     )
     sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
     champs[[i]] <- sim$champion
@@ -444,11 +446,17 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
   champ_file <- file.path(OUTPUT_DIR, paste0("champion_monte_carlo_", season, ".csv"))
   write_csv(slot_odds, slot_file)
   write_csv(champion_odds, champ_file)
-  list(slot_odds_file = slot_file, champion_odds_file = champ_file, champion_odds = champion_odds)
+  list(
+    slot_odds_file = slot_file,
+    champion_odds_file = champ_file,
+    champion_odds = champion_odds,
+    slot_odds = slot_odds
+  )
 }
 
 main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_output = FALSE, deterministic = TRUE,
-                 run_monte_carlo_output = TRUE, monte_carlo_sims = 5000L, monte_carlo_seed = 2026L) {
+                 run_monte_carlo_output = TRUE, monte_carlo_sims = 5000L, monte_carlo_seed = 2026L,
+                 bracket_strategy = BRACKET_STRATEGY, use_seed_round_priors = BRACKET_USE_SEED_PRIORS) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
   # Use manual 2025 seeds when predicting 2025 and no seeds_file specified
@@ -474,10 +482,10 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
   source(here('src', 'utils', 'bracket_slots.R'), local = TRUE)
   slots_season <- get_slots_for_season(season, data$slots)
 
-  message("Simulating bracket for season ", season, "...")
+  message("Simulating deterministic baseline bracket for season ", season, "...")
   source(here("src", "utils", "bracket_logic.R"), local = TRUE)
 
-  result <- simulate_bracket(
+  deterministic_result <- simulate_bracket(
     season = season,
     slots_df = slots_season,
     seeds_df = seeds_season,
@@ -505,7 +513,8 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     tourney_history_stats = data$tourney_history_stats,
     tourney_h2h = data$tourney_h2h,
     upset_history = data$upset_history,
-    deterministic = deterministic
+    deterministic = deterministic,
+    use_seed_round_priors = use_seed_round_priors
   )
 
   # Add team names to results (handle TeamName or Name column)
@@ -536,16 +545,70 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     }
   }
 
+  message("Deterministic champion: ", lookup[as.character(deterministic_result$champion)],
+          " (TeamID ", deterministic_result$champion, ")")
+
+  mc_out <- NULL
+  if (isTRUE(run_monte_carlo_output) && monte_carlo_sims > 0) {
+    message("Running Monte Carlo simulations (n=", monte_carlo_sims, ", seed=", monte_carlo_seed, ")...")
+    mc_out <- run_monte_carlo(
+      data = data,
+      season = season,
+      seeds_season = seeds_season,
+      slots_season = slots_season,
+      lookup = lookup,
+      n_sims = as.integer(monte_carlo_sims),
+      seed = as.integer(monte_carlo_seed),
+      use_projected_output = use_projected_output,
+      use_seed_round_priors = use_seed_round_priors
+    )
+    top_champ <- mc_out$champion_odds %>% slice(1)
+    message("Monte Carlo slot odds saved to ", mc_out$slot_odds_file)
+    message("Monte Carlo champion odds saved to ", mc_out$champion_odds_file)
+    if (nrow(top_champ) > 0) {
+      message("Monte Carlo top champion: ", top_champ$team_name[1], " (", round(100 * top_champ$title_rate[1], 1), "%)")
+    }
+  }
+
+  result <- deterministic_result
+  if (identical(bracket_strategy, "monte_carlo_optimal")) {
+    if (!is.null(mc_out) && !is.null(mc_out$slot_odds) && nrow(mc_out$slot_odds) > 0) {
+      result <- select_optimal_bracket(
+        season = season,
+        slots_df = slots_season,
+        seeds_df = seeds_season,
+        slot_odds = mc_out$slot_odds
+      )
+      message("Selected final bracket via Monte Carlo expected-points optimizer.")
+    } else {
+      warning("bracket_strategy='monte_carlo_optimal' requested but Monte Carlo odds are unavailable; falling back to deterministic bracket.")
+    }
+  } else if (!identical(bracket_strategy, "deterministic")) {
+    warning("Unknown BRACKET_STRATEGY='", bracket_strategy, "'. Falling back to deterministic.")
+  }
+
   game_results <- result$game_results %>%
     mutate(
       team_a_name = lookup[as.character(team_a)],
       team_b_name = lookup[as.character(team_b)],
       winner_name = lookup[as.character(winner)]
     )
-
   champ_name <- lookup[as.character(result$champion)]
+  message("Final strategy (", bracket_strategy, ") champion: ", champ_name, " (TeamID ", result$champion, ")")
 
-  message("Predicted champion: ", champ_name, " (TeamID ", result$champion, ")")
+  # Save deterministic baseline for side-by-side strategy comparison.
+  deterministic_results_named <- deterministic_result$game_results %>%
+    mutate(
+      team_a_name = lookup[as.character(team_a)],
+      team_b_name = lookup[as.character(team_b)],
+      winner_name = lookup[as.character(winner)]
+    )
+  det_base <- if (use_projected_output) {
+    paste0("bracket_prediction_projected_deterministic_", season)
+  } else {
+    paste0("bracket_prediction_deterministic_", season)
+  }
+  write_csv(deterministic_results_named, file.path(OUTPUT_DIR, paste0(det_base, ".csv")))
 
   # Audit: which teams used default values (missing data) per game
   defaults_audit <- build_prediction_defaults_audit(
@@ -569,8 +632,7 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
     evanmiya_metrics = data$evanmiya_metrics,
     shooting_style_metrics = data$shooting_style_metrics,
     tourney_location_metrics = data$tourney_location_metrics
-  )
-  defaults_audit <- defaults_audit %>%
+  ) %>%
     mutate(
       team_a_name = lookup[as.character(team_a)],
       team_b_name = lookup[as.character(team_b)]
@@ -591,37 +653,19 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
   champ_file <- file.path(OUTPUT_DIR, paste0(champ_base, ".txt"))
   writeLines(c(
     paste("Season:", season),
+    paste("Strategy:", bracket_strategy),
     paste("Predicted Champion:", champ_name),
     paste("TeamID:", result$champion)
   ), champ_file)
-
-  mc_out <- NULL
-  if (isTRUE(run_monte_carlo_output) && monte_carlo_sims > 0) {
-    message("Running Monte Carlo simulations (n=", monte_carlo_sims, ", seed=", monte_carlo_seed, ")...")
-    mc_out <- run_monte_carlo(
-      data = data,
-      season = season,
-      seeds_season = seeds_season,
-      slots_season = slots_season,
-      lookup = lookup,
-      n_sims = as.integer(monte_carlo_sims),
-      seed = as.integer(monte_carlo_seed),
-      use_projected_output = use_projected_output
-    )
-    top_champ <- mc_out$champion_odds %>% slice(1)
-    message("Monte Carlo slot odds saved to ", mc_out$slot_odds_file)
-    message("Monte Carlo champion odds saved to ", mc_out$champion_odds_file)
-    if (nrow(top_champ) > 0) {
-      message("Monte Carlo top champion: ", top_champ$team_name[1], " (", round(100 * top_champ$title_rate[1], 1), "%)")
-    }
-  }
 
   invisible(list(
     champion = result$champion,
     champion_name = champ_name,
     game_results = game_results,
     season = season,
-    monte_carlo = mc_out
+    monte_carlo = mc_out,
+    strategy = bracket_strategy,
+    deterministic_champion = deterministic_result$champion
   ))
 }
 

@@ -114,7 +114,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
                             head_to_head = NULL, sos_stats = NULL, rest_stats = NULL, conf_tourney_stats = NULL,
                             conference_stats = NULL, quadrant_stats = NULL, first_four_stats = NULL,
                             tourney_history_stats = NULL, tourney_h2h = NULL, upset_history = NULL,
-                            deterministic = FALSE) {
+                            deterministic = FALSE, use_seed_round_priors = FALSE) {
   # compute_matchup_features is sourced by 02_process_data or 04_predict_bracket before calling simulate_bracket
 
   # Handle column names (Kaggle/raw_historical vary: Slot,StrongSeed,WeakSeed or Season,Slot,Strongseed,Weakseed)
@@ -221,11 +221,13 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
 
     prob_a_wins <- as.numeric(pred[1])
     if (is.na(prob_a_wins)) prob_a_wins <- 0.5
-    prior_a <- seed_round_prior_prob(seed_a, seed_b, round_num, seed_round_priors)
-    if (!is.na(prior_a)) {
-      gap <- abs(prob_a_wins - prior_a)
-      alpha <- min(0.35, 0.6 * gap)
-      prob_a_wins <- (1 - alpha) * prob_a_wins + alpha * prior_a
+    if (isTRUE(use_seed_round_priors)) {
+      prior_a <- seed_round_prior_prob(seed_a, seed_b, round_num, seed_round_priors)
+      if (!is.na(prior_a)) {
+        gap <- abs(prob_a_wins - prior_a)
+        alpha <- min(0.35, 0.6 * gap)
+        prob_a_wins <- (1 - alpha) * prob_a_wins + alpha * prior_a
+      }
     }
 
     if (deterministic) {
@@ -254,4 +256,89 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     game_results = bind_rows(results),
     champion = champion
   )
+}
+
+#' Build a single bracket from Monte Carlo slot odds.
+#'
+#' This optimizer picks a coherent bracket path (respecting prior slot winners)
+#' and maximizes expected points greedily by slot.
+#'
+#' @param season Season year
+#' @param slots_df Bracket slots table
+#' @param seeds_df Seeds table for the season
+#' @param slot_odds Monte Carlo slot odds output with columns: slot, round, team_id, win_rate
+#' @param round_points Named numeric vector of points per round
+#' @return List with slot_winners, game_results, champion
+select_optimal_bracket <- function(season, slots_df, seeds_df, slot_odds,
+                                   round_points = c(`1` = 10, `2` = 20, `3` = 40, `4` = 80, `5` = 160, `6` = 320)) {
+  slots <- as.data.frame(slots_df)
+  nm <- names(slots)
+  slot_col <- { x <- intersect(nm, c("Slot", "slot")); if (length(x) > 0) x[1] else NULL }
+  strong_col <- { x <- intersect(nm, c("Strong", "StrongSeed", "Strongseed")); if (length(x) > 0) x[1] else NULL }
+  weak_col <- { x <- intersect(nm, c("Weak", "WeakSeed", "Weakseed")); if (length(x) > 0) x[1] else NULL }
+  if (!is.null(slot_col) && !is.null(strong_col) && !is.null(weak_col)) {
+    slots <- slots %>% rename(Slot = !!sym(slot_col), Strong = !!sym(strong_col), Weak = !!sym(weak_col))
+  } else if (length(nm) >= 3) {
+    slots <- slots %>% rename(Slot = !!sym(nm[1]), Strong = !!sym(nm[2]), Weak = !!sym(nm[3]))
+  }
+  slots <- slots %>%
+    select(Slot, Strong, Weak) %>%
+    mutate(is_playin = !grepl("^R[0-9]", Slot)) %>%
+    arrange(desc(is_playin), Slot)
+
+  get_slot_win_rate <- function(slot, team_id) {
+    x <- slot_odds %>%
+      filter(slot == !!slot, team_id == !!team_id) %>%
+      pull(win_rate)
+    if (length(x) == 0 || is.na(x[1])) return(0.5)
+    as.numeric(x[1])
+  }
+
+  slot_winners <- list()
+  results <- list()
+
+  for (i in seq_len(nrow(slots))) {
+    slot <- as.character(slots$Slot[i])
+    strong <- as.character(slots$Strong[i])
+    weak <- as.character(slots$Weak[i])
+    round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
+    if (is.na(round_num)) round_num <- 0L
+    pts <- if (as.character(round_num) %in% names(round_points)) as.numeric(round_points[[as.character(round_num)]]) else 0
+
+    team_a <- if (!is.null(slot_winners[[strong]])) {
+      as.integer(slot_winners[[strong]])
+    } else if (is_seed_ref(strong)) {
+      get_team_for_seed(strong, seeds_df, season)
+    } else {
+      NA_integer_
+    }
+    team_b <- if (!is.null(slot_winners[[weak]])) {
+      as.integer(slot_winners[[weak]])
+    } else if (is_seed_ref(weak)) {
+      get_team_for_seed(weak, seeds_df, season)
+    } else {
+      NA_integer_
+    }
+    if (is.na(team_a) || is.na(team_b)) next
+
+    p_a <- get_slot_win_rate(slot, team_a)
+    p_b <- get_slot_win_rate(slot, team_b)
+    score_a <- pts * p_a
+    score_b <- pts * p_b
+    winner <- if (score_a >= score_b) team_a else team_b
+
+    slot_winners[[slot]] <- winner
+    results[[length(results) + 1]] <- tibble::tibble(
+      slot = slot,
+      round = round_num,
+      team_a = team_a,
+      team_b = team_b,
+      winner = winner,
+      prob_a = p_a
+    )
+  }
+
+  last_slot <- slots$Slot[nrow(slots)]
+  champion <- slot_winners[[as.character(last_slot)]]
+  list(slot_winners = slot_winners, game_results = bind_rows(results), champion = champion)
 }

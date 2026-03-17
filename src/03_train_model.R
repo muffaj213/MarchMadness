@@ -33,13 +33,31 @@ MODEL_TYPES <- c("glm", "glmnet", "xgboost", "rand_forest")
 BASE_FEATURE_COLS <- c("seed_diff", "winpct_diff", "late_winpct_diff", "recent_winpct_diff", "recent_mov_diff",
                        "pf_diff", "round", "sos_diff", "conf_tourney_depth_diff",
                        "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "first_four_rest_diff",
-                       "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games")
+                       "deepest_run_diff", "tourney_h2h_team_a_winpct", "tourney_h2h_games",
+                       "seed_diff_sq", "seed_sum", "is_upset_matchup", "upset_seed_gap",
+                       "round_seed_interaction", "upset_winpct_diff", "tourney_winpct_diff",
+                       "rest_diff", "h2h_team_a_winpct", "h2h_games",
+                       "seed_barthag_interaction", "seed_recentmov_interaction")
 EXTRA_FEATURE_COLS <- c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff",
                         "fte_power_diff", "injury_rank_diff", "roster_rank_diff", "evan_killshots_margin_diff",
                         "three_share_diff", "three_point_mismatch", "close2_share_diff", "close2_point_mismatch",
                         "travel_miles_adv", "timezones_adv")
 KENPOM_FEATURE_COLS <- c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
                          "adjem_seed_interaction")
+
+ROUND_WEIGHT_MAP <- c(`0` = 0.5, `1` = 1, `2` = 2, `3` = 4, `4` = 8, `5` = 16, `6` = 32)
+RECENCY_WEIGHT_DECAY <- 0.08
+
+build_case_weights <- function(data) {
+  if (!"Season" %in% names(data)) return(rep(1, nrow(data)))
+  max_season <- max(data$Season, na.rm = TRUE)
+  round_chr <- if ("round" %in% names(data)) as.character(pmax(0L, pmin(6L, as.integer(replace(data$round, is.na(data$round), 1L))))) else "1"
+  round_weight <- as.numeric(ROUND_WEIGHT_MAP[round_chr])
+  round_weight[is.na(round_weight)] <- 1
+  recency_weight <- exp(RECENCY_WEIGHT_DECAY * (as.numeric(data$Season) - max_season))
+  w <- round_weight * recency_weight
+  w / mean(w, na.rm = TRUE)
+}
 
 # -----------------------------------------------------------------------------
 # BASELINE: Regularized to reduce overfitting (~63 games/year)
@@ -85,6 +103,9 @@ build_baseline_workflow <- function(model_type, matchup_data) {
   recipe <- recipe(as.formula(formula_str), data = matchup_data) %>%
     step_zv(all_predictors()) %>%
     step_normalize(all_predictors())
+  if ("case_wt" %in% names(matchup_data)) {
+    recipe <- recipe %>% update_role(case_wt, new_role = "case_weights")
+  }
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = 0, mixture = 0) %>% set_engine("glm"),
@@ -118,6 +139,9 @@ build_tuned_workflow <- function(model_type, matchup_data) {
   recipe <- recipe(as.formula(formula_str), data = matchup_data) %>%
     step_zv(all_predictors()) %>%
     step_normalize(all_predictors())
+  if ("case_wt" %in% names(matchup_data)) {
+    recipe <- recipe %>% update_role(case_wt, new_role = "case_weights")
+  }
 
   spec <- switch(model_type,
     glm = logistic_reg(penalty = tune(), mixture = tune()) %>% set_engine("glmnet"),
@@ -474,6 +498,31 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   message("  Pool: ", paste(names(models), collapse = ", "))
   weights <- rep(1 / length(models), length(models))
   names(weights) <- names(models)
+  meta_coef <- NULL
+
+  tune_data <- matchup_data %>%
+    filter(Season %in% weight_tune_years) %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  if (nrow(tune_data) >= 60) {
+    preds_tune <- list()
+    for (nm in names(models)) {
+      p <- predict_win_prob(models[[nm]], tune_data)
+      preds_tune[[nm]] <- apply_platt(p, calibrators[[nm]])
+    }
+    pred_tune_df <- bind_cols(preds_tune)
+    meta_data <- pred_tune_df %>%
+      mutate(outcome_num = as.integer(tune_data$outcome == "Win"))
+    meta_fit <- tryCatch(
+      glm(outcome_num ~ ., data = meta_data, family = binomial()),
+      error = function(e) NULL
+    )
+    if (!is.null(meta_fit)) {
+      cf <- coef(meta_fit)
+      if (all(c("(Intercept)", names(models)) %in% names(cf))) {
+        meta_coef <- as.numeric(cf[c("(Intercept)", names(models))])
+      }
+    }
+  }
 
   test_data <- matchup_data %>%
     filter(Season %in% test_years) %>%
@@ -487,7 +536,12 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   }
   pred_test_df <- bind_cols(preds_test)
   eps <- 1e-15
-  prob_win <- as.numeric(as.matrix(pred_test_df) %*% matrix(weights, ncol = 1))
+  if (!is.null(meta_coef)) {
+    x <- cbind(1, as.matrix(pred_test_df))
+    prob_win <- as.numeric(plogis(x %*% matrix(meta_coef, ncol = 1)))
+  } else {
+    prob_win <- as.numeric(as.matrix(pred_test_df) %*% matrix(weights, ncol = 1))
+  }
   prob_win <- pmax(eps, pmin(1 - eps, prob_win))
 
   pred_class <- as.integer(prob_win >= 0.5)
@@ -513,7 +567,11 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
     log_loss_sd <- sd(per_yr$ll)
   }
 
-  message("  Blend weights: ", paste(sprintf("%s=%.3f", names(weights), weights), collapse = ", "))
+  if (!is.null(meta_coef)) {
+    message("  Blend method: stacked logistic meta-learner on years ", paste(weight_tune_years, collapse = ", "))
+  } else {
+    message("  Blend weights: ", paste(sprintf("%s=%.3f", names(weights), weights), collapse = ", "))
+  }
   msg <- "  Holdout accuracy: %.2f%% | Log loss: %.4f"
   if (!is.na(accuracy_sd)) msg <- paste0(msg, " (mean +/- SD)")
   message(sprintf(msg, accuracy * 100, log_loss))
@@ -523,6 +581,7 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
     models = models,
     calibrators = calibrators,
     weights = weights,
+    meta_coef = meta_coef,
     model_names = names(models),
     calibration = NULL
   )
@@ -607,11 +666,12 @@ main <- function() {
   matchup_data <- read_csv(matchup_path, show_col_types = FALSE) %>%
     filter(Season >= 2008, Season <= 2025)
 
-  feat_cols <- intersect(c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS), names(matchup_data))
+  feat_cols <- intersect(c(BASE_FEATURE_COLS, KENPOM_FEATURE_COLS, EXTRA_FEATURE_COLS), names(matchup_data))
   n_before <- nrow(matchup_data)
   # Drop rows with invalid outcome (cannot train)
   matchup_data <- matchup_data %>%
     filter(!is.na(outcome) & !is.infinite(outcome))
+  matchup_data$case_wt <- build_case_weights(matchup_data)
   # Impute NA/Inf in features (fix at source preferred; this is safety net for edge cases)
   for (col in feat_cols) {
     if (col %in% names(matchup_data)) {
