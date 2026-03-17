@@ -7,6 +7,7 @@ source(here("src", "config.R"))
 source(here("src", "utils", "feature_engineering.R"))
 source(here("src", "utils", "bracket_logic.R"))
 source(here("src", "utils", "bracket_slots.R"))
+source(here("src", "utils", "team_id_consolidation.R"))
 
 BACKTEST_SEASONS <- c(2022L, 2023L, 2024L)
 ROUND_POINTS <- c(`1` = 10L, `2` = 20L, `3` = 40L, `4` = 80L, `5` = 160L, `6` = 320L)
@@ -16,13 +17,39 @@ read_tourney_results <- function() {
   path_raw <- file.path(RAW_DIR, "MNCAATourneyCompactResults.csv")
   path <- if (file.exists(path_ext)) path_ext else path_raw
   if (!file.exists(path)) stop("Tournament results not found in raw or raw_extended data.")
-  read_csv(path, show_col_types = FALSE)
+  out <- read_csv(path, show_col_types = FALSE)
+  # Match scoring IDs to the same consolidated TeamID space used by model inputs.
+  remap <- load_consolidation_map()
+  out <- apply_remap(out, remap, c("WTeamID", "LTeamID"))
+  out
 }
 
 actual_round_winners <- function(tourney_results, season) {
-  tourney_results %>%
-    filter(Season == season) %>%
-    mutate(round = daynum_to_round(DayNum)) %>%
+  season_games <- tourney_results %>% filter(Season == season)
+  if (nrow(season_games) == 0) {
+    return(tibble(round = integer(), winner = integer()))
+  }
+
+  day_counts <- season_games %>%
+    count(DayNum, name = "n_games") %>%
+    arrange(DayNum) %>%
+    mutate(order_idx = row_number())
+
+  # Support both day-number schemes:
+  # 1) Full Kaggle chronology (134-154+)
+  # 2) Compact chronology in raw_extended (e.g., 135..140 for rounds 1..6)
+  has_playin_day <- nrow(day_counts) >= 7 &&
+    day_counts$n_games[1] <= 4 &&
+    day_counts$n_games[2] >= 30
+
+  day_map <- if (has_playin_day) {
+    day_counts %>% mutate(round = order_idx - 1L)
+  } else {
+    day_counts %>% mutate(round = order_idx)
+  }
+
+  season_games %>%
+    left_join(day_map %>% select(DayNum, round), by = "DayNum") %>%
     transmute(round = as.integer(round), winner = as.integer(WTeamID)) %>%
     filter(round >= 1L, round <= 6L) %>%
     distinct(round, winner)

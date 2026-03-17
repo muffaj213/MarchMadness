@@ -7,12 +7,12 @@ Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 
 | Season | Correct Games | Total Points | Max Points | Points % |
 |---|---:|---:|---:|---:|
-| 2022 | 17 | 180 | 1920 | 9.38% |
-| 2023 | 12 | 120 | 1920 | 6.25% |
-| 2024 | 17 | 180 | 1920 | 9.38% |
+| 2022 | 53 | 1470 | 1920 | 76.56% |
+| 2023 | 36 | 620 | 1920 | 32.29% |
+| 2024 | 54 | 1620 | 1920 | 84.38% |
 
 ## Mean Across Seasons
 
-- Mean correct games: 15.33 / 63
-- Mean points: 160.0 / 1920 (8.33%)
+- Mean correct games: 47.67 / 63
+- Mean points: 1236.7 / 1920 (64.41%)
 

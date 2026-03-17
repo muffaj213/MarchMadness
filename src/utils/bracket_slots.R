@@ -18,11 +18,25 @@ FIRST_FOUR_YEAR <- 2011L
 # Fallback when first arg is empty/NA
 `%||%` <- function(x, y) if (length(x) == 0 || is.na(x[1])) y else x[1]
 
-#' Standard 68-team First Four play-in slots (template when raw_historical unavailable)
-FIRST_FOUR_TEMPLATE <- tibble(
+#' Standard 68-team First Four play-in slots (historical/default template)
+FIRST_FOUR_TEMPLATE_DEFAULT <- tibble(
   Slot = c("W16", "W11", "X11", "Z16"),
   Strong = c("W16a", "W11a", "X11a", "Z16a"),
   Weak = c("W16b", "W11b", "X11b", "Z16b")
+)
+
+#' 2026-specific First Four play-in slots
+FIRST_FOUR_TEMPLATE_2026 <- tibble(
+  Slot = c("W16", "W11", "X11", "Z16"),
+  Strong = c("W16a", "W11a", "X11a", "Z16a"),
+  Weak = c("W16b", "W11b", "X11b", "Z16b")
+)
+
+#' Historical template where the extra 11-seed play-in is in Y region.
+FIRST_FOUR_TEMPLATE_HISTORICAL <- tibble(
+  Slot = c("W16", "W11", "Y11", "Z16"),
+  Strong = c("W16a", "W11a", "Y11a", "Z16a"),
+  Weak = c("W16b", "W11b", "Y11b", "Z16b")
 )
 
 #' Correct 64-team bracket (R1-R6) with NCAA pairings: R2 = 1v8, 2v7, 3v6, 4v5 per region.
@@ -82,10 +96,17 @@ get_slots_for_season <- function(season, base_slots) {
   }
 
   # Fallback: use correct bracket (raw_historical doesn't have this season)
+  ff_template <- if (season == 2026L) {
+    FIRST_FOUR_TEMPLATE_2026
+  } else if (season >= FIRST_FOUR_YEAR) {
+    FIRST_FOUR_TEMPLATE_HISTORICAL
+  } else {
+    FIRST_FOUR_TEMPLATE_DEFAULT
+  }
   base <- if (season < FIRST_FOUR_YEAR) {
     CORRECT_BRACKET_BASE
   } else {
-    bind_rows(FIRST_FOUR_TEMPLATE, CORRECT_BRACKET_BASE)
+    bind_rows(ff_template, CORRECT_BRACKET_BASE)
   }
   base %>%
     rename(StrongSeed = Strong, WeakSeed = Weak) %>%

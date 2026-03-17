@@ -136,6 +136,8 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     arrange(desc(is_playin), Slot)
   slot_winners <- list()
   results <- list()
+  seeds_num <- seeds_df %>%
+    mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed)))
 
   for (i in seq_len(nrow(slots))) {
     slot <- as.character(slots$Slot[i])
@@ -160,6 +162,21 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     }
 
     if (is.na(team_a) || is.na(team_b)) next
+
+    # Model training always uses TeamA as the better (lower-number) seed.
+    # For Round 2+, slot order does not guarantee this, so normalize here.
+    seed_a <- seeds_num %>% filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
+    seed_b <- seeds_num %>% filter(Season == season, TeamID == team_b) %>% pull(SeedNum)
+    seed_a <- if (length(seed_a) > 0) seed_a[1] else NA_integer_
+    seed_b <- if (length(seed_b) > 0) seed_b[1] else NA_integer_
+    if (!is.na(seed_a) && !is.na(seed_b) && seed_a > seed_b) {
+      tmp <- team_a
+      team_a <- team_b
+      team_b <- tmp
+      tmp_seed <- seed_a
+      seed_a <- seed_b
+      seed_b <- tmp_seed
+    }
 
     # Derive round from slot: play-in (W16, Y11, etc.) = 0; R1 = 1, R2 = 2, ..., R6 = 6
     round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
@@ -204,12 +221,6 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
 
     prob_a_wins <- as.numeric(pred[1])
     if (is.na(prob_a_wins)) prob_a_wins <- 0.5
-    seed_a <- seeds_df %>% mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed))) %>%
-      filter(Season == season, TeamID == team_a) %>% pull(SeedNum)
-    seed_b <- seeds_df %>% mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed))) %>%
-      filter(Season == season, TeamID == team_b) %>% pull(SeedNum)
-    seed_a <- if (length(seed_a) > 0) seed_a[1] else NA_integer_
-    seed_b <- if (length(seed_b) > 0) seed_b[1] else NA_integer_
     prior_a <- seed_round_prior_prob(seed_a, seed_b, round_num, seed_round_priors)
     if (!is.na(prior_a)) {
       gap <- abs(prob_a_wins - prior_a)
