@@ -5,7 +5,8 @@ Method: strict out-of-sample rolling fit per season (train only on seasons befor
 Scoring: slot-accurate ESPN-style (exact slot winner required).
 Comparisons: rolling model vs chalk baseline.
 Model: xgboost baseline spec.
-Feature profile: minimal
+Feature profile: full
+Seed-round priors enabled: TRUE
 Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 
 ## Season Scores
@@ -21,14 +22,14 @@ Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 | 2018 | model | 2017 | 36 | 810 | 1920 | 42.19% | 100.0% | 0.0% |
 | 2019 | model | 2018 | 41 | 920 | 1920 | 47.92% | 100.0% | 0.0% |
 | 2021 | model | 2020 | 37 | 1000 | 1920 | 52.08% | 96.8% | 0.0% |
-| 2022 | model | 2021 | 36 | 620 | 1920 | 32.29% | 96.8% | 0.0% |
+| 2022 | model | 2021 | 33 | 550 | 1920 | 28.65% | 96.8% | 0.0% |
 | 2023 | model | 2022 | 35 | 470 | 1920 | 24.48% | 100.0% | 0.0% |
 | 2024 | model | 2023 | 40 | 1210 | 1920 | 63.02% | 96.8% | 0.0% |
 
 ## Mean Across Seasons
 
 - chalk: 37.17 / 63 games, 811.7 / 1920 points (42.27%)
-- model: 37.50 / 63 games, 838.3 / 1920 points (43.66%)
+- model: 37.00 / 63 games, 826.7 / 1920 points (43.06%)
 
 ## Scoring Mode Notes
 
@@ -41,5 +42,5 @@ Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 
 ## Leakage Guard
 
-- Enabled: TRUE; Seasons checked: 2024; Thresholds -> point_drop >= 200 OR r1_drop >= 4
+- Enabled: FALSE; Seasons checked: 2024; Thresholds -> point_drop >= 200 OR r1_drop >= 4
 

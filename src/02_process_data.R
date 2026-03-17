@@ -121,6 +121,59 @@ main <- function() {
     idx <- grep("L.*Team|Loser", names(regular_results), ignore.case = TRUE)
     if (length(idx) >= 1) names(regular_results)[idx[1]] <- "LTeamID"
   }
+  if (!"WScore" %in% names(regular_results) || !"LScore" %in% names(regular_results)) {
+    stop("Regular season results must include WScore and LScore for leakage filtering.")
+  }
+  if (!"WScore" %in% names(tourney_results) || !"LScore" %in% names(tourney_results)) {
+    stop("Tournament results must include WScore and LScore for leakage filtering.")
+  }
+
+  # Leakage safeguard: remove any regular-season rows that are exact duplicates
+  # of NCAA tournament games (same season, teams, and final score).
+  build_game_sig <- function(df) {
+    df %>%
+      transmute(
+        Season = as.integer(Season),
+        low_team = pmin(as.integer(WTeamID), as.integer(LTeamID)),
+        high_team = pmax(as.integer(WTeamID), as.integer(LTeamID)),
+        low_score = pmin(as.integer(WScore), as.integer(LScore)),
+        high_score = pmax(as.integer(WScore), as.integer(LScore))
+      ) %>%
+      distinct()
+  }
+
+  reg_sig <- build_game_sig(regular_results)
+  tour_sig <- build_game_sig(tourney_results)
+  overlap_sig <- inner_join(
+    reg_sig,
+    tour_sig,
+    by = c("Season", "low_team", "high_team", "low_score", "high_score")
+  )
+  if (nrow(overlap_sig) > 0) {
+    before_n <- nrow(regular_results)
+    regular_results <- regular_results %>%
+      mutate(
+        Season = as.integer(Season),
+        low_team = pmin(as.integer(WTeamID), as.integer(LTeamID)),
+        high_team = pmax(as.integer(WTeamID), as.integer(LTeamID)),
+        low_score = pmin(as.integer(WScore), as.integer(LScore)),
+        high_score = pmax(as.integer(WScore), as.integer(LScore))
+      ) %>%
+      anti_join(
+        overlap_sig,
+        by = c("Season", "low_team", "high_team", "low_score", "high_score")
+      ) %>%
+      select(-low_team, -high_team, -low_score, -high_score)
+    removed_n <- before_n - nrow(regular_results)
+    message(
+      "  Removed ", removed_n,
+      " regular-season rows that exactly match NCAA tournament games (leakage safeguard)."
+    )
+    write_csv(
+      overlap_sig,
+      file.path(PROC_DIR, "regular_tourney_overlap_removed.csv")
+    )
+  }
 
   message("Computing team statistics...")
   win_pct <- compute_win_pct(regular_results)

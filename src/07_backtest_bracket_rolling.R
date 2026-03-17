@@ -11,7 +11,7 @@ source(here("src", "utils", "team_id_consolidation.R"))
 
 BACKTEST_SEASONS <- c(2018L, 2019L, 2021L, 2022L, 2023L, 2024L)
 ROUND_POINTS <- c(`1` = 10L, `2` = 20L, `3` = 40L, `4` = 80L, `5` = 160L, `6` = 320L)
-LEAKAGE_GUARD <- TRUE
+LEAKAGE_GUARD <- tolower(trimws(Sys.getenv("ROLLING_LEAKAGE_GUARD", unset = "true"))) %in% c("true", "1", "yes")
 LEAKAGE_GUARD_SEASONS <- c(2024L)
 LEAKAGE_MIN_POINT_DROP <- 200L
 LEAKAGE_MIN_R1_DROP <- 4L
@@ -23,6 +23,7 @@ MINIMAL_FEATURE_COLS <- c(
   "is_upset_matchup", "upset_seed_gap", "round_seed_interaction"
 )
 FEATURE_PROFILE <- tolower(trimws(Sys.getenv("ROLLING_FEATURE_PROFILE", unset = "minimal")))
+USE_SEED_ROUND_PRIORS <- tolower(trimws(Sys.getenv("ROLLING_USE_SEED_PRIORS", unset = "true"))) %in% c("true", "1", "yes")
 
 read_tourney_results <- function() {
   path_ext <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
@@ -370,7 +371,7 @@ simulate_model_bracket <- function(data, season, model, seeds_override = NULL, s
     evanmiya_metrics = data$evanmiya_metrics,
     shooting_style_metrics = data$shooting_style_metrics,
     tourney_location_metrics = data$tourney_location_metrics,
-    seed_round_priors = data$seed_round_priors,
+    seed_round_priors = if (isTRUE(USE_SEED_ROUND_PRIORS)) data$seed_round_priors else tibble(),
     head_to_head = data$head_to_head,
     sos_stats = data$sos_stats,
     rest_stats = data$rest_stats,
@@ -518,6 +519,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
   }
 
   message("Rolling feature profile: ", profile)
+  message("Seed-round priors enabled: ", USE_SEED_ROUND_PRIORS)
 
   if (!isTRUE(USE_TOURNEY_LOCATION_FEATURES)) {
     # Tournament locations file includes path-dependent round coverage and can
@@ -671,6 +673,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
     "Comparisons: rolling model vs chalk baseline.",
     "Model: xgboost baseline spec.",
     paste0("Feature profile: ", profile),
+    paste0("Seed-round priors enabled: ", USE_SEED_ROUND_PRIORS),
     "Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).",
     "",
     "## Season Scores",
