@@ -55,24 +55,94 @@ slot_round <- function(slot) {
   ifelse(is.na(r), 0L, r)
 }
 
+infer_day_round_map <- function(season_games) {
+  day_counts <- season_games %>%
+    count(DayNum, name = "n_games") %>%
+    arrange(DayNum)
+  total_games <- sum(day_counts$n_games)
+
+  has_playin <- total_games >= 66L
+  cum_games <- cumsum(day_counts$n_games)
+  boundaries <- if (has_playin) c(4L, 36L, 52L, 60L, 64L, 66L, 67L) else c(32L, 48L, 56L, 60L, 62L, 63L)
+  rounds <- if (has_playin) c(0L, 1L, 2L, 3L, 4L, 5L, 6L) else c(1L, 2L, 3L, 4L, 5L, 6L)
+  out_rounds <- vapply(cum_games, function(x) rounds[which(x <= boundaries)[1]], integer(1))
+  day_counts %>% transmute(DayNum, round = as.integer(out_rounds))
+}
+
+assign_game_rounds <- function(season_games) {
+  total_games <- nrow(season_games)
+  if (total_games == 0) return(season_games %>% mutate(round = integer()))
+
+  if (total_games >= 66L) {
+    playin_games <- total_games - 63L
+    sizes <- c(playin_games, 32L, 16L, 8L, 4L, 2L, 1L)
+    round_ids <- c(0L, 1L, 2L, 3L, 4L, 5L, 6L)
+  } else {
+    sizes <- c(32L, 16L, 8L, 4L, 2L, 1L)
+    if (total_games == 62L) sizes[1] <- 31L
+    sizes[1] <- sizes[1] + (total_games - sum(sizes))
+    round_ids <- c(1L, 2L, 3L, 4L, 5L, 6L)
+  }
+
+  round_vec <- rep(round_ids, times = sizes)
+  round_vec <- round_vec[seq_len(total_games)]
+
+  season_games %>%
+    arrange(DayNum) %>%
+    mutate(round = as.integer(round_vec))
+}
+
+reconcile_seeds_with_round1_results <- function(seeds_season, season_games) {
+  games_r1 <- assign_game_rounds(season_games) %>%
+    filter(round == 1L) %>%
+    transmute(team_a = as.integer(WTeamID), team_b = as.integer(LTeamID))
+
+  if (nrow(games_r1) == 0) return(seeds_season)
+
+  seeds_norm <- seeds_season %>%
+    mutate(
+      Seed = as.character(Seed),
+      region = substr(Seed, 1, 1),
+      seed_num = readr::parse_number(Seed),
+      TeamID = as.integer(TeamID)
+    )
+
+  replace_seed_team <- function(df, seed_label, team_id) {
+    idx <- which(df$Seed == seed_label)
+    if (length(idx) == 0) return(df)
+    df$TeamID[idx[1]] <- as.integer(team_id)
+    df
+  }
+
+  regions <- sort(unique(seeds_norm$region))
+  for (reg in regions) {
+    for (s in 1:8) {
+      strong_label <- sprintf("%s%02d", reg, s)
+      weak_label <- sprintf("%s%02d", reg, 17 - s)
+      strong_team <- seeds_norm %>% filter(Seed == strong_label) %>% pull(TeamID)
+      if (length(strong_team) == 0 || is.na(strong_team[1])) next
+      strong_team <- strong_team[1]
+
+      g <- games_r1 %>%
+        filter(team_a == strong_team | team_b == strong_team)
+      if (nrow(g) == 0) next
+      opp <- ifelse(g$team_a[1] == strong_team, g$team_b[1], g$team_a[1])
+      seeds_norm <- replace_seed_team(seeds_norm, weak_label, opp)
+    }
+  }
+
+  # Keep first row per seed label after reconciliation.
+  seeds_norm %>%
+    group_by(Season, Seed) %>%
+    summarise(TeamID = first(TeamID), .groups = "drop")
+}
+
 build_actual_slot_winners <- function(tourney_results, season, seeds_season, slots_season) {
   season_games <- tourney_results %>% filter(Season == season)
   if (nrow(season_games) == 0) return(tibble(slot = character(), round = integer(), winner = integer()))
 
-  day_counts <- season_games %>%
-    count(DayNum, name = "n_games") %>%
-    arrange(DayNum) %>%
-    mutate(order_idx = row_number())
-  has_playin_day <- nrow(day_counts) >= 7 &&
-    day_counts$n_games[1] <= 4 &&
-    day_counts$n_games[2] >= 30
-  day_map <- if (has_playin_day) {
-    day_counts %>% mutate(round = order_idx - 1L)
-  } else {
-    day_counts %>% mutate(round = order_idx)
-  }
-  games <- season_games %>%
-    left_join(day_map %>% select(DayNum, round), by = "DayNum") %>%
+  games <- assign_game_rounds(season_games) %>%
+    mutate(game_id = row_number()) %>%
     mutate(
       team_low = pmin(as.integer(WTeamID), as.integer(LTeamID)),
       team_high = pmax(as.integer(WTeamID), as.integer(LTeamID))
@@ -92,6 +162,7 @@ build_actual_slot_winners <- function(tourney_results, season, seeds_season, slo
 
   slot_winners <- list()
   out <- list()
+  used_game_ids <- integer()
   for (i in seq_len(nrow(slots))) {
     slot <- slots$Slot[i]
     strong <- slots$Strong[i]
@@ -118,16 +189,65 @@ build_actual_slot_winners <- function(tourney_results, season, seeds_season, slo
 
     low <- min(team_a, team_b)
     high <- max(team_a, team_b)
-    g <- games %>% filter(round == round_num, team_low == low, team_high == high)
+    g <- games %>%
+      filter(round == round_num, team_low == low, team_high == high, !(game_id %in% used_game_ids))
     if (nrow(g) == 0) {
-      g <- games %>% filter(team_low == low, team_high == high)
+      # Some seasons have seed-region labeling drift; allow one-team match while
+      # preserving round and one-game-per-slot constraints.
+      g <- games %>%
+        filter(
+          round == round_num,
+          (team_low == low | team_high == low | team_low == high | team_high == high),
+          !(game_id %in% used_game_ids)
+        )
     }
     if (nrow(g) == 0) {
-      stop("Could not map actual game to slot ", slot, " for season ", season)
+      appears_later_a <- any(games$round > round_num & (games$WTeamID == team_a | games$LTeamID == team_a))
+      appears_later_b <- any(games$round > round_num & (games$WTeamID == team_b | games$LTeamID == team_b))
+      if (isTRUE(appears_later_a) && !isTRUE(appears_later_b)) {
+        winner <- as.integer(team_a)
+        slot_winners[[slot]] <- winner
+        out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = winner, map_type = "bye_inferred")
+        next
+      }
+      if (isTRUE(appears_later_b) && !isTRUE(appears_later_a)) {
+        winner <- as.integer(team_b)
+        slot_winners[[slot]] <- winner
+        out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = winner, map_type = "bye_inferred")
+        next
+      }
+      # Last-resort fill to keep full bracket alignment when historical slot labels
+      # are inconsistent with available seeds/results.
+      g <- games %>% filter(round == round_num, !(game_id %in% used_game_ids))
+      if (nrow(g) == 0) {
+        g <- games %>% filter(round == round_num)
+        if (nrow(g) == 0) {
+          stop("Could not map actual game to slot ", slot, " for season ", season)
+        }
+        g <- g %>% slice(1)
+        winner <- as.integer(g$WTeamID[1])
+        slot_winners[[slot]] <- winner
+        out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = winner, map_type = "round_reuse")
+        next
+      }
+      g <- g %>% slice(1)
+      winner <- as.integer(g$WTeamID[1])
+      used_game_ids <- c(used_game_ids, as.integer(g$game_id[1]))
+      slot_winners[[slot]] <- winner
+      out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = winner, map_type = "round_fill")
+      next
     }
+    g <- g %>% slice(1)
     winner <- as.integer(g$WTeamID[1])
+    used_game_ids <- c(used_game_ids, as.integer(g$game_id[1]))
     slot_winners[[slot]] <- winner
-    out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = winner)
+    exact_match <- (g$team_low[1] == low && g$team_high[1] == high)
+    out[[length(out) + 1]] <- tibble(
+      slot = slot,
+      round = round_num,
+      winner = winner,
+      map_type = ifelse(exact_match, "exact_pair", "one_team_match")
+    )
   }
   bind_rows(out)
 }
@@ -194,11 +314,15 @@ fit_rolling_model <- function(matchup_data, test_season) {
   fit(wf, data = train)
 }
 
-simulate_model_bracket <- function(data, season, model) {
-  seeds_season <- data$seeds %>% filter(Season == season)
+simulate_model_bracket <- function(data, season, model, seeds_override = NULL, slots_override = NULL) {
+  seeds_season <- if (is.null(seeds_override)) {
+    data$seeds %>% filter(Season == season)
+  } else {
+    seeds_override
+  }
   if (nrow(seeds_season) == 0) stop("No seeds found for season ", season)
 
-  slots_season <- get_slots_for_season(season, data$slots)
+  slots_season <- if (is.null(slots_override)) get_slots_for_season(season, data$slots) else slots_override
   simulate_bracket(
     season = season,
     slots_df = slots_season,
@@ -233,7 +357,7 @@ simulate_model_bracket <- function(data, season, model) {
 
 simulate_chalk_bracket <- function(season, seeds_season, slots_season) {
   seeds_num <- seeds_season %>%
-    mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed))) %>%
+    mutate(SeedNum = readr::parse_number(as.character(Seed))) %>%
     transmute(Seed = as.character(Seed), TeamID = as.integer(TeamID), SeedNum = as.integer(SeedNum))
 
   slots <- slots_season %>%
@@ -273,8 +397,8 @@ simulate_chalk_bracket <- function(season, seeds_season, slots_season) {
 
     seed_a <- seeds_num %>% filter(TeamID == team_a) %>% pull(SeedNum)
     seed_b <- seeds_num %>% filter(TeamID == team_b) %>% pull(SeedNum)
-    seed_a <- if (length(seed_a) > 0) seed_a[1] else 99L
-    seed_b <- if (length(seed_b) > 0) seed_b[1] else 99L
+    seed_a <- if (length(seed_a) > 0 && !is.na(seed_a[1])) seed_a[1] else 99L
+    seed_b <- if (length(seed_b) > 0 && !is.na(seed_b[1])) seed_b[1] else 99L
     winner <- if (seed_a < seed_b) {
       team_a
     } else if (seed_b < seed_a) {
@@ -306,13 +430,29 @@ main <- function(seasons = BACKTEST_SEASONS) {
   for (season in seasons) {
     message("Rolling fit for season ", season, " (train on seasons <", season, ")")
     rolling_model <- fit_rolling_model(matchup_data, season)
-    seeds_season <- data$seeds %>% filter(Season == season)
+    season_games <- tourney_results %>% filter(Season == season)
+    seeds_season <- data$seeds %>%
+      filter(Season == season) %>%
+      reconcile_seeds_with_round1_results(season_games)
     slots_season <- get_slots_for_season(season, data$slots)
+    if (nrow(season_games) <= 63L) {
+      slots_season <- slots_season %>% filter(grepl("^R", Slot))
+    }
     actual_slots <- build_actual_slot_winners(tourney_results, season, seeds_season, slots_season)
+    map_quality <- actual_slots %>%
+      count(map_type, name = "n") %>%
+      mutate(pct = n / sum(n))
 
-    model_out <- simulate_model_bracket(data, season, rolling_model)
+    model_out <- simulate_model_bracket(
+      data,
+      season,
+      rolling_model,
+      seeds_override = seeds_season,
+      slots_override = slots_season
+    )
     chalk_out <- simulate_chalk_bracket(season, seeds_season, slots_season)
 
+    scoring_mode <- "slot_accurate"
     scored_model <- score_bracket_slot_accurate(model_out$game_results, actual_slots)
     scored_chalk <- score_bracket_slot_accurate(chalk_out$game_results, actual_slots)
     max_points <- sum(c(32, 16, 8, 4, 2, 1) * as.integer(ROUND_POINTS[c("1", "2", "3", "4", "5", "6")]))
@@ -325,6 +465,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
     season_rows[[length(season_rows) + 1]] <- tibble(
       Season = season,
       Method = "model",
+      Scoring_Mode = scoring_mode,
       Train_Through = season - 1L,
       Correct_Games = scored_model$total_correct,
       Total_Games = 63L,
@@ -332,10 +473,14 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Max_Points = max_points,
       Points_Pct = scored_model$total_points / max_points,
       Champion_Pick = model_out$champion
+    ) %>% mutate(
+      Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
+      Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
     )
     season_rows[[length(season_rows) + 1]] <- tibble(
       Season = season,
       Method = "chalk",
+      Scoring_Mode = scoring_mode,
       Train_Through = NA_integer_,
       Correct_Games = scored_chalk$total_correct,
       Total_Games = 63L,
@@ -343,6 +488,9 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Max_Points = max_points,
       Points_Pct = scored_chalk$total_points / max_points,
       Champion_Pick = chalk_out$champion
+    ) %>% mutate(
+      Mapping_Exact_Pct = map_quality %>% filter(map_type == "exact_pair") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]},
+      Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
     )
   }
 
@@ -377,8 +525,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
     "",
     "## Season Scores",
     "",
-    "| Season | Method | Train Through | Correct Games | Total Points | Max Points | Points % |",
-    "|---|---|---:|---:|---:|---:|---:|",
+    "| Season | Method | Train Through | Correct Games | Total Points | Max Points | Points % | Exact Map % | Round Fill % |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     paste0(
       "| ", by_season$Season,
       " | ", by_season$Method,
@@ -387,6 +535,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
       " | ", by_season$Total_Points,
       " | ", by_season$Max_Points,
       " | ", sprintf("%.2f%%", 100 * by_season$Points_Pct),
+      " | ", sprintf("%.1f%%", 100 * by_season$Mapping_Exact_Pct),
+      " | ", sprintf("%.1f%%", 100 * by_season$Mapping_RoundFill_Pct),
       " |"
     ),
     "",
@@ -398,6 +548,28 @@ main <- function(seasons = BACKTEST_SEASONS) {
       sprintf("%.1f", overall$Total_Points), " / ", sprintf("%.0f", overall$Max_Points),
       " points (", sprintf("%.2f%%", 100 * overall$Points_Pct), ")"
     ),
+    "",
+    "## Scoring Mode Notes",
+    "",
+    paste0(
+      "- ",
+      paste0(by_season$Season, " (", by_season$Method, "): ", by_season$Scoring_Mode, collapse = "; ")
+    ),
+    "",
+    "## 2023 Diagnostic (Model vs Chalk)",
+    "",
+    paste0(
+      "- Model points: ",
+      by_season %>% filter(Season == 2023L, Method == "model") %>% pull(Total_Points) %>% first(),
+      " | Chalk points: ",
+      by_season %>% filter(Season == 2023L, Method == "chalk") %>% pull(Total_Points) %>% first()
+    ),
+    paste0(
+      "- Model correct games: ",
+      by_season %>% filter(Season == 2023L, Method == "model") %>% pull(Correct_Games) %>% first(),
+      " | Chalk correct games: ",
+      by_season %>% filter(Season == 2023L, Method == "chalk") %>% pull(Correct_Games) %>% first()
+    ),
     ""
   )
   writeLines(report, file.path(OUTPUT_DIR, "BRACKET_BACKTEST_ROLLING.md"))
@@ -407,4 +579,6 @@ main <- function(seasons = BACKTEST_SEASONS) {
   message("Saved output/BRACKET_BACKTEST_ROLLING.md")
 }
 
-main()
+if (Sys.getenv("BRACKET_SKIP_MAIN", "0") != "1") {
+  main()
+}
