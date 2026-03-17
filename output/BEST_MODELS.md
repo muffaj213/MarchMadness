@@ -1,6 +1,6 @@
 # March Madness Model Performance
 
-*Updated 2026-03-16*
+*Updated 2026-03-17*
 
 **Validation:** Time-based CV for tuning (expanding window by season). Holdout: 2022, 2023, 2024 (188 games total). Metrics show mean ± SD across holdout years when multiple.
 
@@ -26,10 +26,10 @@
 
 | Model       | Config   | Accuracy | Log Loss |
 |-------------|----------|----------|----------|
-| glm | baseline | 76.06 ± 14.47% | 0.5879 ± 0.3520 |
-| glmnet | baseline | 72.87 ± 14.93% | 0.5421 ± 0.2165 |
-| xgboost | baseline | 75.00 ± 9.00% | 0.4952 ± 0.1043 |
-| rand_forest | baseline | 71.28 ± 9.17% | 0.5091 ± 0.0788 |
+| glm | baseline | 61.70 ± 9.18% | 0.7680 ± 0.1725 |
+| glmnet | baseline | 64.89 ± 9.88% | 0.6529 ± 0.0912 |
+| xgboost | baseline | 71.28 ± 2.90% | 0.6030 ± 0.0370 |
+| rand_forest | baseline | 67.02 ± 2.68% | 0.5929 ± 0.0199 |
 
 ---
 
@@ -39,10 +39,10 @@
 
 | Model       | Config | Accuracy | Log Loss |
 |-------------|--------|----------|----------|
-| glm | tuned | 74.47 ± 12.31% | 0.5853 ± 0.2831 |
-| glmnet | tuned | 73.40 ± 14.05% | 0.5545 ± 0.2360 |
-| xgboost | tuned | 73.94 ± 10.92% | 0.5063 ± 0.1048 |
-| rand_forest | tuned | 70.74 ± 6.75% | 0.5137 ± 0.0677 |
+| glm | tuned | 65.43 ± 8.43% | 0.7175 ± 0.1358 |
+| glmnet | tuned | 67.02 ± 7.98% | 0.6171 ± 0.0688 |
+| xgboost | tuned | 67.55 ± 3.40% | 0.5967 ± 0.0411 |
+| rand_forest | tuned | 68.09 ± 3.46% | 0.5869 ± 0.0202 |
 
 ---
 
@@ -52,7 +52,7 @@
 
 | Metric         | Model       | Config   | Accuracy | Log Loss |
 |----------------|-------------|----------|----------|----------|
-| Best (log loss)| xgboost | baseline | 75.00 ± 9.00% | 0.4952 ± 0.1043 |
+| Best (log loss)| rand_forest | tuned | 68.09 ± 3.46% | 0.5869 ± 0.0202 |
 
 ---
 
@@ -62,7 +62,7 @@
 
 | Metric   | Accuracy | Log Loss | N Games |
 |----------|----------|----------|--------|
-| Ensemble | 73.40 ± 10.56% | 0.5013 ± 0.0872 | 188 |
+| Ensemble | 68.09 ± 1.61% | 0.5898 ± 0.0272 | 188 |
 
 ### Ensemble Weights
 
@@ -73,5 +73,5 @@
 | rand_forest_baseline | 0.250 |
 | rand_forest_tuned | 0.250 |
 
-*Weights updated 2026-03-16*
+*Weights updated 2026-03-17*
 
