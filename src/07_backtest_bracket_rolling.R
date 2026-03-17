@@ -16,6 +16,13 @@ LEAKAGE_GUARD_SEASONS <- c(2024L)
 LEAKAGE_MIN_POINT_DROP <- 200L
 LEAKAGE_MIN_R1_DROP <- 4L
 USE_TOURNEY_LOCATION_FEATURES <- FALSE
+USE_NISHAA_FEATURES <- FALSE
+USE_MINIMAL_FEATURE_SET <- TRUE
+MINIMAL_FEATURE_COLS <- c(
+  "round", "seed_diff", "seed_diff_sq", "seed_sum",
+  "is_upset_matchup", "upset_seed_gap", "round_seed_interaction"
+)
+FEATURE_PROFILE <- tolower(trimws(Sys.getenv("ROLLING_FEATURE_PROFILE", unset = "minimal")))
 
 read_tourney_results <- function() {
   path_ext <- file.path(RAW_EXTENDED_DIR, "MNCAATourneyCompactResults.csv")
@@ -447,6 +454,71 @@ main <- function(seasons = BACKTEST_SEASONS) {
   matchup_data <- read_csv(file.path(PROC_DIR, "matchup_data.csv"), show_col_types = FALSE)
   tourney_results <- read_tourney_results()
 
+  data_orig <- data
+  matchup_orig <- matchup_data
+  profile <- FEATURE_PROFILE
+  valid_profiles <- c("full", "no_nishaa", "minimal", "kenpom_only", "resume_only", "fte_evan_shooting_only")
+  if (!(profile %in% valid_profiles)) {
+    stop("Unknown ROLLING_FEATURE_PROFILE='", profile, "'. Valid: ", paste(valid_profiles, collapse = ", "))
+  }
+
+  nishaa_feature_cols <- intersect(
+    names(matchup_data),
+    c(
+      "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff",
+      "home_win_rate_diff", "away_win_rate_diff",
+      "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff",
+      "fte_power_diff", "injury_rank_diff", "roster_rank_diff", "evan_killshots_margin_diff",
+      "three_share_diff", "three_point_mismatch", "close2_share_diff", "close2_point_mismatch",
+      "travel_miles_adv", "timezones_adv",
+      "adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv",
+      "adjem_seed_interaction", "seed_barthag_interaction"
+    )
+  )
+  kenpom_cols <- intersect(names(matchup_data), c("adjem_diff", "adj_off_diff", "adj_def_diff", "tempo_diff", "luck_diff", "off_vs_def_adv", "adjem_seed_interaction"))
+  resume_cols <- intersect(names(matchup_data), c("home_win_rate_diff", "away_win_rate_diff", "elo_diff", "net_diff", "wab_diff", "barthag_diff", "elite_sos_diff", "conf_em_diff", "quad1_winpct_diff", "quad12_winpct_diff", "seed_barthag_interaction"))
+  fte_evan_shooting_cols <- intersect(names(matchup_data), c("fte_power_diff", "injury_rank_diff", "roster_rank_diff", "evan_killshots_margin_diff", "three_share_diff", "three_point_mismatch", "close2_share_diff", "close2_point_mismatch"))
+
+  # Base for ablations: zero all external columns and clear external tables.
+  if (profile != "full") {
+    if (length(nishaa_feature_cols) > 0) {
+      for (col in nishaa_feature_cols) matchup_data[[col]] <- 0
+    }
+    data$kenpom_stats <- tibble()
+    data$home_away_stats <- tibble()
+    data$resume_stats <- tibble()
+    data$fte_ratings <- tibble()
+    data$evanmiya_metrics <- tibble()
+    data$shooting_style_metrics <- tibble()
+    data$tourney_location_metrics <- tibble()
+    data$conference_stats <- tibble()
+    data$quadrant_stats <- tibble()
+  }
+
+  if (profile == "kenpom_only") {
+    if (length(kenpom_cols) > 0) matchup_data[kenpom_cols] <- matchup_orig[kenpom_cols]
+    data$kenpom_stats <- data_orig$kenpom_stats
+  } else if (profile == "resume_only") {
+    if (length(resume_cols) > 0) matchup_data[resume_cols] <- matchup_orig[resume_cols]
+    data$home_away_stats <- data_orig$home_away_stats
+    data$resume_stats <- data_orig$resume_stats
+    data$conference_stats <- data_orig$conference_stats
+    data$quadrant_stats <- data_orig$quadrant_stats
+  } else if (profile == "fte_evan_shooting_only") {
+    if (length(fte_evan_shooting_cols) > 0) matchup_data[fte_evan_shooting_cols] <- matchup_orig[fte_evan_shooting_cols]
+    data$fte_ratings <- data_orig$fte_ratings
+    data$evanmiya_metrics <- data_orig$evanmiya_metrics
+    data$shooting_style_metrics <- data_orig$shooting_style_metrics
+  } else if (profile == "minimal") {
+    feature_cols_all <- setdiff(names(matchup_data), c("Season", "TeamA", "TeamB", "outcome"))
+    zero_cols <- setdiff(feature_cols_all, MINIMAL_FEATURE_COLS)
+    if (length(zero_cols) > 0) {
+      for (col in zero_cols) matchup_data[[col]] <- 0
+    }
+  }
+
+  message("Rolling feature profile: ", profile)
+
   if (!isTRUE(USE_TOURNEY_LOCATION_FEATURES)) {
     # Tournament locations file includes path-dependent round coverage and can
     # leak realized advancement when used in retrospective backtests.
@@ -527,7 +599,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Mapping_RoundFill_Pct = map_quality %>% filter(map_type == "round_fill") %>% pull(pct) %>% {if (length(.) == 0) 0 else .[1]}
     )
 
-    if (isTRUE(LEAKAGE_GUARD) && season %in% LEAKAGE_GUARD_SEASONS) {
+    if (isTRUE(LEAKAGE_GUARD) && profile != "minimal" && season %in% LEAKAGE_GUARD_SEASONS) {
       message("Leakage guard: shuffled-label control for season ", season)
       shuffled_model <- fit_rolling_model(
         matchup_data,
@@ -598,6 +670,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
     "Scoring: slot-accurate ESPN-style (exact slot winner required).",
     "Comparisons: rolling model vs chalk baseline.",
     "Model: xgboost baseline spec.",
+    paste0("Feature profile: ", profile),
     "Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).",
     "",
     "## Season Scores",

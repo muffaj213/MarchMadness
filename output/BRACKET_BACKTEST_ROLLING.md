@@ -5,6 +5,7 @@ Method: strict out-of-sample rolling fit per season (train only on seasons befor
 Scoring: slot-accurate ESPN-style (exact slot winner required).
 Comparisons: rolling model vs chalk baseline.
 Model: xgboost baseline spec.
+Feature profile: minimal
 Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 
 ## Season Scores
@@ -17,17 +18,17 @@ Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 | 2022 | chalk | NA | 37 | 940 | 1920 | 48.96% | 96.8% | 0.0% |
 | 2023 | chalk | NA | 35 | 470 | 1920 | 24.48% | 100.0% | 0.0% |
 | 2024 | chalk | NA | 38 | 730 | 1920 | 38.02% | 96.8% | 0.0% |
-| 2018 | model | 2017 | 59 | 1770 | 1920 | 92.19% | 100.0% | 0.0% |
-| 2019 | model | 2018 | 62 | 1840 | 1920 | 95.83% | 100.0% | 0.0% |
-| 2021 | model | 2020 | 62 | 1900 | 1920 | 98.96% | 96.8% | 0.0% |
-| 2022 | model | 2021 | 61 | 1600 | 1920 | 83.33% | 96.8% | 0.0% |
-| 2023 | model | 2022 | 35 | 480 | 1920 | 25.00% | 100.0% | 0.0% |
-| 2024 | model | 2023 | 62 | 1760 | 1920 | 91.67% | 96.8% | 0.0% |
+| 2018 | model | 2017 | 36 | 810 | 1920 | 42.19% | 100.0% | 0.0% |
+| 2019 | model | 2018 | 41 | 920 | 1920 | 47.92% | 100.0% | 0.0% |
+| 2021 | model | 2020 | 37 | 1000 | 1920 | 52.08% | 96.8% | 0.0% |
+| 2022 | model | 2021 | 36 | 620 | 1920 | 32.29% | 96.8% | 0.0% |
+| 2023 | model | 2022 | 35 | 470 | 1920 | 24.48% | 100.0% | 0.0% |
+| 2024 | model | 2023 | 40 | 1210 | 1920 | 63.02% | 96.8% | 0.0% |
 
 ## Mean Across Seasons
 
 - chalk: 37.17 / 63 games, 811.7 / 1920 points (42.27%)
-- model: 56.83 / 63 games, 1558.3 / 1920 points (81.16%)
+- model: 37.50 / 63 games, 838.3 / 1920 points (43.66%)
 
 ## Scoring Mode Notes
 
@@ -35,7 +36,7 @@ Scoring: ESPN-style round weights (10, 20, 40, 80, 160, 320).
 
 ## 2023 Diagnostic (Model vs Chalk)
 
-- Model points: 480 | Chalk points: 470
+- Model points: 470 | Chalk points: 470
 - Model correct games: 35 | Chalk correct games: 35
 
 ## Leakage Guard
