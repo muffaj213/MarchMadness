@@ -424,6 +424,7 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
     )
     sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
     champs[[i]] <- sim$champion
+    if (i %% 500 == 0 || i == n_sims) message("  MC sim ", i, " / ", n_sims)
   }
   sim_games <- bind_rows(sims)
   slot_odds <- sim_games %>%

@@ -450,6 +450,7 @@ simulate_model_optimal_bracket <- function(data, season, model, seeds_override =
       use_seed_round_priors = use_seed_round_priors
     )
     sims[[i]] <- sim$game_results %>% mutate(sim_id = i)
+    if (i %% 100 == 0 || i == n_sims) message("    MC optimal sim ", i, " / ", n_sims)
   }
   slot_odds <- bind_rows(sims) %>%
     count(slot, round, team_id = winner, name = "wins") %>%
