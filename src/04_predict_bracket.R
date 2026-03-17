@@ -377,8 +377,10 @@ load_for_prediction <- function(seeds_file = NULL) {
 #' @param seeds_file Optional path to seeds CSV for projected bracket. If NULL, use tourney_seeds.csv.
 #' @param use_projected_output If TRUE, write to bracket_prediction_projected_YEAR.csv
 #' @param deterministic If TRUE, pick higher-probability team; if FALSE, sample
-# Manual seeds override: use this file for 2025 predictions (correct bracket from Selection Sunday)
-SEEDS_2025_PATH <- file.path(BRACKET_DIR, "seeds_68team_2025.csv")
+# Manual seeds override pattern: seeds_68team_<season>.csv
+default_manual_seeds_path <- function(season) {
+  file.path(BRACKET_DIR, paste0("seeds_68team_", as.integer(season), ".csv"))
+}
 
 #' Run Monte Carlo bracket simulation and save slot/champion odds
 #' @param n_sims Number of bracket simulations
@@ -539,10 +541,12 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
                  bracket_strategy = BRACKET_STRATEGY, use_seed_round_priors = BRACKET_USE_SEED_PRIORS) {
   if (!dir.exists(OUTPUT_DIR)) dir.create(OUTPUT_DIR, recursive = TRUE)
 
-  # Use manual 2025 seeds when predicting 2025 and no seeds_file specified
-  if (season == 2025L && is.null(seeds_file) && file.exists(SEEDS_2025_PATH)) {
-    seeds_file <- SEEDS_2025_PATH
-    message("Using manual seeds: ", SEEDS_2025_PATH)
+  # Use manual seeds when available for prediction season and no seeds_file specified.
+  # This supports future seasons (e.g., 2026) without needing hardcoded yearly logic.
+  auto_seeds_path <- default_manual_seeds_path(season)
+  if (is.null(seeds_file) && file.exists(auto_seeds_path)) {
+    seeds_file <- auto_seeds_path
+    message("Using manual seeds: ", auto_seeds_path)
   }
 
   message("Loading model and data...")
@@ -552,10 +556,16 @@ main <- function(season = PREDICT_SEASON, seeds_file = NULL, use_projected_outpu
   # Some datasets have slots per season; if not, use all slots
   seeds_season <- data$seeds %>% filter(Season == season)
   if (nrow(seeds_season) == 0) {
-    message("No seeds for season ", season, ". Using latest available season.")
-    available <- unique(data$seeds$Season)
-    season <- max(available)
-    seeds_season <- data$seeds %>% filter(Season == season)
+    available <- sort(unique(data$seeds$Season))
+    expected_manual <- default_manual_seeds_path(season)
+    err_msg <- paste0(
+      "No seeds found for requested season ", season, ".\n",
+      "Run halted to avoid using the wrong bracket season.\n",
+      "Expected manual seeds file (if using projected/current bracket): ", expected_manual, "\n",
+      "Available seasons in loaded seeds data: ", paste(available, collapse = ", ")
+    )
+    message(err_msg)
+    stop(err_msg, call. = FALSE)
   }
 
   # Build season-specific bracket slots (supports 68-team First Four templates)
