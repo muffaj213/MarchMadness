@@ -387,6 +387,17 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
                             n_sims = 1000L, seed = 2026L, use_projected_output = FALSE,
                             use_seed_round_priors = FALSE) {
   source(here("src", "utils", "bracket_logic.R"), local = TRUE)
+  format_seconds <- function(x) {
+    x <- as.integer(max(0, round(as.numeric(x))))
+    h <- x %/% 3600
+    m <- (x %% 3600) %/% 60
+    s <- x %% 60
+    if (h > 0) {
+      sprintf("%dh %02dm %02ds", h, m, s)
+    } else {
+      sprintf("%dm %02ds", m, s)
+    }
+  }
   n_workers_env <- suppressWarnings(as.integer(Sys.getenv("MONTE_CARLO_WORKERS", unset = "0")))
   detected_cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
   if (is.na(detected_cores) || detected_cores < 1L) detected_cores <- 1L
@@ -433,12 +444,20 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
   }
 
   message("Monte Carlo workers: ", n_workers, " (set MONTE_CARLO_WORKERS to override)")
+  t_start <- Sys.time()
   if (n_workers <= 1L) {
     set.seed(seed)
     sim_out <- vector("list", n_sims)
     for (i in seq_len(n_sims)) {
       sim_out[[i]] <- simulate_one(i)
-      if (i %% 250 == 0 || i == n_sims) message("  MC sim ", i, " / ", n_sims)
+      if (i %% 250 == 0 || i == n_sims) {
+        elapsed <- as.numeric(difftime(Sys.time(), t_start, units = "secs"))
+        sims_per_sec <- i / max(elapsed, 1e-6)
+        eta <- (n_sims - i) / max(sims_per_sec, 1e-6)
+        message("  MC sim ", i, " / ", n_sims,
+                " | elapsed ", format_seconds(elapsed),
+                " | eta ", format_seconds(eta))
+      }
     }
   } else {
     project_root <- here::here()
@@ -463,9 +482,24 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
       NULL
     })
     parallel::clusterExport(cl, varlist = c("simulate_one"), envir = environment())
-    chunk_results <- parallel::parLapply(cl, sim_chunks, function(ids) {
-      lapply(ids, simulate_one)
-    })
+    chunk_results <- vector("list", length(sim_chunks))
+    completed_sims <- 0L
+    for (batch_start in seq.int(1L, length(sim_chunks), by = n_workers)) {
+      batch_end <- min(length(sim_chunks), batch_start + n_workers - 1L)
+      batch_idx <- seq.int(batch_start, batch_end)
+      batch_chunks <- sim_chunks[batch_idx]
+      batch_results <- parallel::parLapply(cl, batch_chunks, function(ids) {
+        lapply(ids, simulate_one)
+      })
+      chunk_results[batch_idx] <- batch_results
+      completed_sims <- completed_sims + sum(vapply(batch_chunks, length, integer(1)))
+      elapsed <- as.numeric(difftime(Sys.time(), t_start, units = "secs"))
+      sims_per_sec <- completed_sims / max(elapsed, 1e-6)
+      eta <- (n_sims - completed_sims) / max(sims_per_sec, 1e-6)
+      message("  MC progress ", completed_sims, " / ", n_sims,
+              " sims | elapsed ", format_seconds(elapsed),
+              " | eta ", format_seconds(eta))
+    }
     sim_out <- unlist(chunk_results, recursive = FALSE)
   }
 
