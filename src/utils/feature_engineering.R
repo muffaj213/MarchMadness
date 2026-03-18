@@ -10,7 +10,8 @@ library(tidyr)
 #' @param seed_char Character vector of seeds like "W01", "X02"
 #' @return Integer vector of seed numbers
 parse_seed_number <- function(seed_char) {
-  as.integer(gsub("^[A-Za-z]+0?", "", seed_char))
+  # Support standard seeds (W01) and First Four suffixes (W11a/W11b, W16a/W16b).
+  as.integer(sub("^[A-Za-z]*0*([0-9]{1,2}).*$", "\\1", as.character(seed_char)))
 }
 
 #' Compute regular-season win percentage for each team in each season

@@ -1,5 +1,5 @@
 Model,Weight
+glm_tuned,0.25
 xgboost_baseline,0.25
-xgboost_tuned,0.25
 rand_forest_baseline,0.25
 rand_forest_tuned,0.25

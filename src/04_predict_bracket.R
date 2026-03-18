@@ -170,6 +170,29 @@ load_for_prediction <- function(seeds_file = NULL) {
     out
   }
 
+  report_seed_source_coverage <- function(source_df, label) {
+    if (is.null(source_df) || nrow(source_df) == 0 || !all(c("Season", "TeamID") %in% names(source_df))) {
+      message("TeamID coverage [", label, "]: source empty or missing Season/TeamID columns")
+      return(invisible(NULL))
+    }
+    for (sid in sort(unique(seeds$Season))) {
+      seed_keys <- seeds %>% filter(Season == sid) %>% distinct(Season, TeamID)
+      source_keys <- source_df %>% filter(Season == sid) %>% distinct(Season, TeamID)
+      covered <- nrow(inner_join(seed_keys, source_keys, by = c("Season", "TeamID")))
+      missing <- seed_keys %>% anti_join(source_keys, by = c("Season", "TeamID"))
+      message("TeamID coverage [", label, "] season ", sid, ": ", covered, "/", nrow(seed_keys),
+              " covered, ", nrow(missing), " missing")
+      if (nrow(missing) > 0) {
+        missing_named <- missing %>%
+          left_join(teams %>% select(TeamID, TeamName), by = "TeamID") %>%
+          mutate(team_label = if_else(is.na(TeamName), as.character(TeamID), paste0(TeamName, " (", TeamID, ")")))
+        preview <- paste(head(missing_named$team_label, 12), collapse = ", ")
+        suffix <- if (nrow(missing_named) > 12) paste0(" ... +", nrow(missing_named) - 12, " more") else ""
+        message("  Missing TeamIDs [", label, "] season ", sid, ": ", preview, suffix)
+      }
+    }
+  }
+
   ensure_seed_defaults <- function(df, defaults, label) {
     keys <- seeds %>% distinct(Season, TeamID)
     if (is.null(df) || nrow(df) == 0) {
@@ -213,6 +236,17 @@ load_for_prediction <- function(seeds_file = NULL) {
   }
   conference_raw <- load_conference_strength(lookup = lookup)
   quadrant_raw <- load_quadrant_stats(lookup = lookup)
+
+  # Explicit diagnostics so missing TeamID mappings are visible before defaults fill.
+  report_seed_source_coverage(kenpom_stats, "kenpom_stats (processed+augmented)")
+  report_seed_source_coverage(home_away_raw, "home_away_raw")
+  report_seed_source_coverage(resume_raw, "resume_raw")
+  report_seed_source_coverage(fte_raw, "fte_raw")
+  report_seed_source_coverage(evan_raw, "evanmiya_raw")
+  report_seed_source_coverage(shooting_raw, "shooting_raw")
+  report_seed_source_coverage(location_raw, "tourney_location_raw")
+  report_seed_source_coverage(conference_raw, "conference_raw")
+  report_seed_source_coverage(quadrant_raw, "quadrant_raw")
 
   home_away_stats <- augment_team_feature(home_away_stats, home_away_raw, "home/away stats")
   resume_stats <- augment_team_feature(resume_stats, resume_raw, "resume stats")
@@ -479,6 +513,8 @@ run_monte_carlo <- function(data, season, seeds_season, slots_season, lookup,
     parallel::clusterEvalQ(cl, {
       library(dplyr)
       library(tidyr)
+      # Required for predict.workflow / tidymodels model objects in workers.
+      library(tidymodels)
       source(file.path(project_root, "src", "utils", "feature_engineering.R"))
       source(file.path(project_root, "src", "utils", "bracket_logic.R"))
       NULL

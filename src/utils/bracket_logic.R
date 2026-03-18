@@ -137,7 +137,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
   slot_winners <- list()
   results <- list()
   seeds_num <- seeds_df %>%
-    mutate(SeedNum = as.integer(gsub("^[A-Za-z]+0?", "", Seed)))
+    mutate(SeedNum = as.integer(sub("^[A-Za-z]*0*([0-9]{1,2}).*$", "\\1", as.character(Seed))))
 
   for (i in seq_len(nrow(slots))) {
     slot <- as.character(slots$Slot[i])
@@ -179,7 +179,7 @@ simulate_bracket <- function(season, slots_df, seeds_df, model,
     }
 
     # Derive round from slot: play-in (W16, Y11, etc.) = 0; R1 = 1, R2 = 2, ..., R6 = 6
-    round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
+    round_num <- suppressWarnings(as.integer(sub("^R([0-9]+).*", "\\1", slot)))
     if (is.na(round_num)) round_num <- 0L  # First Four play-in games
     features <- compute_matchup_features(team_a, team_b, season, seeds_df, win_pct, points_stats, kenpom_stats, late_win_pct,
                                          head_to_head = head_to_head, sos_stats = sos_stats, rest_stats = rest_stats,
@@ -301,7 +301,7 @@ select_optimal_bracket <- function(season, slots_df, seeds_df, slot_odds,
     slot <- as.character(slots$Slot[i])
     strong <- as.character(slots$Strong[i])
     weak <- as.character(slots$Weak[i])
-    round_num <- as.integer(sub("^R([0-9]+).*", "\\1", slot))
+    round_num <- suppressWarnings(as.integer(sub("^R([0-9]+).*", "\\1", slot)))
     if (is.na(round_num)) round_num <- 0L
     pts <- if (as.character(round_num) %in% names(round_points)) as.numeric(round_points[[as.character(round_num)]]) else 0
 

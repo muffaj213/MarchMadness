@@ -114,6 +114,35 @@ map_kenpom_to_teamids <- function(kp_df, lookup) {
   matched$TeamID
 }
 
+#' Prefer provided TeamID only when valid for season; otherwise map by name
+#' @param df Data frame with Season, Team, and optional TeamID
+#' @param lookup Season-team lookup from build_season_team_lookup()
+#' @return Integer vector TeamID aligned to df rows
+resolve_team_ids <- function(df, lookup) {
+  if (!all(c("Season", "Team") %in% names(df))) {
+    return(rep(NA_integer_, nrow(df)))
+  }
+  if (!"TeamID" %in% names(df)) {
+    df$TeamID <- NA_integer_
+  }
+  valid_ids <- lookup %>%
+    distinct(Season, TeamID) %>%
+    mutate(.valid_lookup_id = TRUE)
+  existing <- df %>%
+    transmute(
+      .row = row_number(),
+      Season = suppressWarnings(as.integer(Season)),
+      Team = Team,
+      TeamID = suppressWarnings(as.integer(TeamID))
+    ) %>%
+    left_join(valid_ids, by = c("Season", "TeamID")) %>%
+    mutate(TeamID = if_else(!is.na(.valid_lookup_id), TeamID, NA_integer_)) %>%
+    select(.row, Season, Team, TeamID)
+
+  mapped <- map_kenpom_to_teamids(existing %>% select(Season, Team), lookup)
+  ifelse(!is.na(existing$TeamID), existing$TeamID, mapped)
+}
+
 #' Load and process GitHub KenPom data (Year, Team, AdjustO, AdjustD, AdjustT, Pyth)
 #'
 #' Pyth is efficiency margin (AdjEM-like). AdjustO/AdjustD = offensive/defensive efficiency.
@@ -528,7 +557,7 @@ load_fte_ratings <- function(path = NULL, lookup) {
       TeamID = if (!is.na(team_no_col) && team_no_col %in% names(.)) suppressWarnings(as.integer(.data[[team_no_col]])) else NA_integer_,
       fte_power_rating = suppressWarnings(as.numeric(.data[[rating_col]]))
     )
-  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out$TeamID <- resolve_team_ids(out, lookup)
   out %>%
     filter(!is.na(TeamID), !is.na(fte_power_rating)) %>%
     select(Season, TeamID, fte_power_rating) %>%
@@ -557,7 +586,7 @@ load_evanmiya_metrics <- function(path = NULL, lookup) {
       roster_rank = if (!is.na(roster_col)) suppressWarnings(as.numeric(.data[[roster_col]])) else NA_real_,
       evan_killshots_margin = if (!is.na(ks_col)) suppressWarnings(as.numeric(.data[[ks_col]])) else NA_real_
     )
-  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out$TeamID <- resolve_team_ids(out, lookup)
   out %>%
     filter(!is.na(TeamID)) %>%
     select(Season, TeamID, injury_rank, roster_rank, evan_killshots_margin) %>%
@@ -588,7 +617,7 @@ load_shooting_style_metrics <- function(path = NULL, lookup) {
       close_twos_share = if (!is.na(c2_col)) suppressWarnings(as.numeric(.data[[c2_col]])) else NA_real_,
       close_twos_d_share = if (!is.na(c2d_col)) suppressWarnings(as.numeric(.data[[c2d_col]])) else NA_real_
     )
-  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out$TeamID <- resolve_team_ids(out, lookup)
   out %>%
     filter(!is.na(TeamID)) %>%
     select(Season, TeamID, threes_share, threes_d_share, close_twos_share, close_twos_d_share) %>%
@@ -632,7 +661,7 @@ load_tourney_location_metrics <- function(path = NULL, lookup) {
       travel_miles = suppressWarnings(as.numeric(.data[[miles_col]])),
       timezones_crossed = if (!is.na(tz_col)) suppressWarnings(as.numeric(.data[[tz_col]])) else 0
     )
-  out$TeamID <- ifelse(!is.na(out$TeamID), out$TeamID, map_kenpom_to_teamids(out, lookup))
+  out$TeamID <- resolve_team_ids(out, lookup)
   out %>%
     filter(!is.na(TeamID), !is.na(round)) %>%
     group_by(Season, TeamID, round) %>%
