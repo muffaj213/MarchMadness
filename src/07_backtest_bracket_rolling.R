@@ -349,6 +349,7 @@ compute_round1_correct <- function(pred_games, actual_slots) {
 
 count_predicted_upsets <- function(pred_games, seeds_season) {
   if (nrow(pred_games) == 0 || nrow(seeds_season) == 0) return(0L)
+  if (!all(c("team_a", "team_b", "winner") %in% names(pred_games))) return(0L)
   seeds_num <- seeds_season %>%
     mutate(SeedNum = readr::parse_number(as.character(Seed))) %>%
     select(TeamID, SeedNum)
@@ -517,7 +518,13 @@ simulate_chalk_bracket <- function(season, seeds_season, slots_season) {
     }
 
     slot_winners[[slot]] <- winner
-    out[[length(out) + 1]] <- tibble(slot = slot, round = round_num, winner = as.integer(winner))
+    out[[length(out) + 1]] <- tibble(
+      slot = slot,
+      round = round_num,
+      team_a = as.integer(team_a),
+      team_b = as.integer(team_b),
+      winner = as.integer(winner)
+    )
   }
   list(game_results = bind_rows(out), champion = as.integer(slot_winners[["R6CH"]]))
 }
