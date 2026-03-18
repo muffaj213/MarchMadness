@@ -286,12 +286,51 @@ select_optimal_bracket <- function(season, slots_df, seeds_df, slot_odds,
     mutate(is_playin = !grepl("^R[0-9]", Slot)) %>%
     arrange(desc(is_playin), Slot)
 
+  # Build slot DAG so each local pick can consider downstream slots that depend
+  # on the current slot winner (future-round expected value proxy).
+  edge_df <- bind_rows(
+    slots %>% transmute(child = Strong, parent = Slot),
+    slots %>% transmute(child = Weak, parent = Slot)
+  ) %>%
+    filter(child %in% slots$Slot)
+
+  get_descendants <- function(slot_id) {
+    seen <- character()
+    queue <- as.character(slot_id)
+    while (length(queue) > 0) {
+      cur <- queue[1]
+      queue <- queue[-1]
+      parents <- edge_df %>% filter(child == cur) %>% pull(parent)
+      parents <- unique(as.character(parents))
+      parents <- parents[!(parents %in% seen)]
+      if (length(parents) > 0) {
+        seen <- c(seen, parents)
+        queue <- c(queue, parents)
+      }
+    }
+    seen
+  }
+  descendants_map <- setNames(lapply(as.character(slots$Slot), get_descendants), as.character(slots$Slot))
+  round_map <- setNames(vapply(as.character(slots$Slot), slot_round, integer(1)), as.character(slots$Slot))
+
   get_slot_win_rate <- function(slot, team_id) {
     x <- slot_odds %>%
       filter(slot == !!slot, team_id == !!team_id) %>%
       pull(win_rate)
     if (length(x) == 0 || is.na(x[1])) return(0.5)
     as.numeric(x[1])
+  }
+
+  slot_expected_value <- function(slot, team_id) {
+    all_slots <- c(slot, descendants_map[[as.character(slot)]])
+    ev <- 0
+    for (s in all_slots) {
+      rnd <- round_map[[as.character(s)]]
+      if (is.null(rnd)) rnd <- slot_round(as.character(s))
+      pts <- if (as.character(rnd) %in% names(round_points)) as.numeric(round_points[[as.character(rnd)]]) else 0
+      ev <- ev + pts * get_slot_win_rate(as.character(s), team_id)
+    }
+    ev
   }
 
   slot_winners <- list()
@@ -323,8 +362,9 @@ select_optimal_bracket <- function(season, slots_df, seeds_df, slot_odds,
 
     p_a <- get_slot_win_rate(slot, team_a)
     p_b <- get_slot_win_rate(slot, team_b)
-    score_a <- pts * p_a
-    score_b <- pts * p_b
+    # Score by current round + downstream rounds reachable from this slot.
+    score_a <- slot_expected_value(slot, team_a)
+    score_b <- slot_expected_value(slot, team_b)
     winner <- if (score_a >= score_b) team_a else team_b
 
     slot_winners[[slot]] <- winner

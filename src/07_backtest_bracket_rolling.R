@@ -295,43 +295,209 @@ score_bracket_slot_accurate <- function(pred_games, actual_slots) {
   )
 }
 
+compute_log_loss <- function(actual01, pred_prob) {
+  p <- pmax(1e-15, pmin(1 - 1e-15, as.numeric(pred_prob)))
+  y <- as.numeric(actual01)
+  -mean(y * log(p) + (1 - y) * log(1 - p))
+}
+
+build_rolling_case_weights <- function(df) {
+  if (!("Season" %in% names(df))) return(rep(1, nrow(df)))
+  latest <- suppressWarnings(max(as.integer(df$Season), na.rm = TRUE))
+  if (!is.finite(latest)) latest <- 0L
+  season_gap <- pmax(0L, latest - as.integer(df$Season))
+  # Recency weighting helps match production training behavior.
+  recency_w <- 0.92 ^ season_gap
+
+  round_w <- if ("Round" %in% names(df)) {
+    dplyr::recode(as.integer(df$Round),
+      `0` = 0.75, `1` = 1.0, `2` = 1.1, `3` = 1.2, `4` = 1.3, `5` = 1.4, `6` = 1.5,
+      .default = 1.0
+    )
+  } else {
+    rep(1, nrow(df))
+  }
+  as.numeric(recency_w * round_w)
+}
+
+rolling_model_spec <- function(model_type) {
+  switch(model_type,
+    "glm" = logistic_reg(mode = "classification") %>% set_engine("glm"),
+    "glmnet" = logistic_reg(mode = "classification", penalty = 0.01, mixture = 1) %>% set_engine("glmnet"),
+    "xgboost" = boost_tree(
+      mode = "classification",
+      trees = 200,
+      min_n = 15,
+      learn_rate = 0.05,
+      tree_depth = 3,
+      stop_iter = 15
+    ) %>% set_engine("xgboost", validation = 0.15),
+    "rand_forest" = rand_forest(
+      mode = "classification",
+      trees = 500,
+      min_n = 10,
+      mtry = tune()
+    ) %>% set_engine("ranger", importance = "none"),
+    stop("Unsupported rolling model type: ", model_type)
+  )
+}
+
+fit_rolling_candidate <- function(train_df, feature_cols, model_type) {
+  formula_str <- paste("outcome ~", paste(feature_cols, collapse = " + "))
+  rec <- recipe(as.formula(formula_str), data = train_df, case_weights = case_wt) %>%
+    step_zv(all_predictors()) %>%
+    step_normalize(all_predictors())
+
+  spec <- rolling_model_spec(model_type)
+  wf <- workflow() %>% add_recipe(rec)
+
+  if (model_type == "rand_forest") {
+    mtry_val <- max(1L, floor(sqrt(length(feature_cols))))
+    spec <- finalize_model(spec, tibble(mtry = mtry_val))
+  }
+
+  wf %>% add_model(spec) %>% fit(data = train_df)
+}
+
 fit_rolling_model <- function(matchup_data, test_season, shuffle_labels = FALSE, shuffle_seed = 42L) {
-  train <- matchup_data %>%
+  train_full <- matchup_data %>%
     filter(Season < test_season) %>%
     filter(!is.na(outcome) & !is.infinite(outcome))
 
-  if (nrow(train) < 200) stop("Insufficient training rows before season ", test_season)
+  if (nrow(train_full) < 200) stop("Insufficient training rows before season ", test_season)
 
-  feature_cols <- setdiff(names(train), c("Season", "TeamA", "TeamB", "outcome"))
+  feature_cols <- setdiff(names(train_full), c("Season", "TeamA", "TeamB", "outcome", "Round"))
   for (col in feature_cols) {
-    bad <- is.na(train[[col]]) | is.infinite(train[[col]])
-    if (any(bad)) train[[col]][bad] <- 0
+    bad <- is.na(train_full[[col]]) | is.infinite(train_full[[col]])
+    if (any(bad)) train_full[[col]][bad] <- 0
   }
 
   if (isTRUE(shuffle_labels)) {
     set.seed(as.integer(shuffle_seed))
-    train$outcome <- sample(train$outcome)
+    train_full$outcome <- sample(train_full$outcome)
   }
 
-  train <- train %>%
-    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  prep_train <- function(df) {
+    w <- build_rolling_case_weights(df)
+    df %>%
+      mutate(
+        outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")),
+        case_wt = hardhat::importance_weights(w)
+      )
+  }
 
-  formula_str <- paste("outcome ~", paste(feature_cols, collapse = " + "))
-  rec <- recipe(as.formula(formula_str), data = train) %>%
-    step_zv(all_predictors()) %>%
-    step_normalize(all_predictors())
+  seasons_avail <- sort(unique(as.integer(train_full$Season)))
+  val_season <- max(seasons_avail, na.rm = TRUE)
+  can_validate <- length(seasons_avail) >= 3 &&
+    sum(train_full$Season < val_season) >= 300 &&
+    sum(train_full$Season == val_season) >= 50
 
-  spec <- boost_tree(
-    mode = "classification",
-    trees = 150,
-    min_n = 15,
-    learn_rate = 0.05,
-    tree_depth = 3,
-    stop_iter = 10
-  ) %>% set_engine("xgboost", validation = 0.15)
+  model_types <- c("glm", "glmnet", "xgboost", "rand_forest")
 
-  wf <- workflow() %>% add_recipe(rec) %>% add_model(spec)
-  fit(wf, data = train)
+  if (!can_validate) {
+    fallback_fit <- fit_rolling_candidate(prep_train(train_full), feature_cols, "xgboost")
+    return(list(
+      model = fallback_fit,
+      selected_model = "xgboost_fallback",
+      validation_season = NA_integer_,
+      validation_log_loss = NA_real_
+    ))
+  }
+
+  analysis <- train_full %>% filter(Season < val_season)
+  assess <- train_full %>% filter(Season == val_season)
+  analysis_f <- prep_train(analysis)
+  assess_f <- prep_train(assess)
+  assess_y <- as.integer(assess_f$outcome == "Win")
+
+  fit_candidates <- list()
+  fit_scores <- tibble()
+  assess_pred_tbl <- tibble(outcome_num = assess_y)
+
+  for (mt in model_types) {
+    candidate_fit <- tryCatch(
+      fit_rolling_candidate(analysis_f, feature_cols, mt),
+      error = function(e) NULL
+    )
+    if (is.null(candidate_fit)) next
+
+    pred <- tryCatch(
+      predict(candidate_fit, assess_f, type = "prob")$.pred_Win,
+      error = function(e) rep(0.5, nrow(assess_f))
+    )
+    ll <- compute_log_loss(assess_y, pred)
+
+    fit_candidates[[mt]] <- candidate_fit
+    fit_scores <- bind_rows(fit_scores, tibble(model = mt, log_loss = ll))
+    assess_pred_tbl[[mt]] <- pmax(1e-15, pmin(1 - 1e-15, as.numeric(pred)))
+  }
+
+  if (nrow(fit_scores) == 0) {
+    fallback_fit <- fit_rolling_candidate(prep_train(train_full), feature_cols, "xgboost")
+    return(list(
+      model = fallback_fit,
+      selected_model = "xgboost_fallback_after_fit_error",
+      validation_season = val_season,
+      validation_log_loss = NA_real_
+    ))
+  }
+
+  ensemble_meta_coef <- NULL
+  ensemble_candidate_names <- intersect(model_types, names(fit_candidates))
+  if (length(ensemble_candidate_names) >= 2) {
+    meta_formula <- as.formula(paste("outcome_num ~", paste(ensemble_candidate_names, collapse = " + ")))
+    meta_fit <- tryCatch(
+      glm(meta_formula, data = assess_pred_tbl, family = binomial()),
+      error = function(e) NULL
+    )
+    if (!is.null(meta_fit)) {
+      ensemble_prob <- tryCatch(
+        pmax(1e-15, pmin(1 - 1e-15, as.numeric(predict(meta_fit, newdata = assess_pred_tbl, type = "response")))),
+        error = function(e) NULL
+      )
+      if (!is.null(ensemble_prob)) {
+        fit_scores <- bind_rows(
+          fit_scores,
+          tibble(model = "stacked_ensemble", log_loss = compute_log_loss(assess_y, ensemble_prob))
+        )
+        ensemble_meta_coef <- coef(meta_fit)
+      }
+    }
+  }
+
+  best <- fit_scores %>% arrange(log_loss) %>% slice(1)
+  selected <- as.character(best$model[1])
+
+  if (selected == "stacked_ensemble" && !is.null(ensemble_meta_coef)) {
+    full_models <- list()
+    full_train_f <- prep_train(train_full)
+    for (mt in ensemble_candidate_names) {
+      full_models[[mt]] <- fit_rolling_candidate(full_train_f, feature_cols, mt)
+    }
+    ensemble_model <- structure(list(
+      type = "ensemble",
+      models = full_models,
+      calibrators = NULL,
+      weights = rep(1 / length(full_models), length(full_models)),
+      meta_coef = ensemble_meta_coef,
+      model_names = names(full_models),
+      calibration = NULL
+    ), class = c("ensemble_model", "list"))
+    return(list(
+      model = ensemble_model,
+      selected_model = selected,
+      validation_season = val_season,
+      validation_log_loss = as.numeric(best$log_loss[1])
+    ))
+  }
+
+  final_fit <- fit_rolling_candidate(prep_train(train_full), feature_cols, selected)
+  list(
+    model = final_fit,
+    selected_model = selected,
+    validation_season = val_season,
+    validation_log_loss = as.numeric(best$log_loss[1])
+  )
 }
 
 compute_round1_correct <- function(pred_games, actual_slots) {
@@ -622,7 +788,12 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
   for (season in seasons) {
     message("Rolling fit for season ", season, " (train on seasons <", season, ")")
-    rolling_model <- fit_rolling_model(matchup_data, season)
+    rolling_fit <- fit_rolling_model(matchup_data, season)
+    rolling_model <- rolling_fit$model
+    message(
+      "  selected rolling model: ", rolling_fit$selected_model,
+      ifelse(is.na(rolling_fit$validation_log_loss), "", paste0(" (val log-loss=", round(rolling_fit$validation_log_loss, 4), ")"))
+    )
     season_games <- tourney_results %>% filter(Season == season)
     seeds_season <- data$seeds %>%
       filter(Season == season) %>%
@@ -651,15 +822,20 @@ main <- function(seasons = BACKTEST_SEASONS) {
       slots_override = slots_season,
       n_sims = ROLLING_MC_SIMS
     )
-    model_optimal_no_priors_out <- simulate_model_optimal_bracket(
-      data,
-      season,
-      rolling_model,
-      seeds_override = seeds_season,
-      slots_override = slots_season,
-      n_sims = ROLLING_MC_SIMS,
-      use_seed_round_priors = FALSE
-    )
+    model_optimal_no_priors_out <- if (isTRUE(USE_SEED_ROUND_PRIORS)) {
+      simulate_model_optimal_bracket(
+        data,
+        season,
+        rolling_model,
+        seeds_override = seeds_season,
+        slots_override = slots_season,
+        n_sims = ROLLING_MC_SIMS,
+        use_seed_round_priors = FALSE
+      )
+    } else {
+      # If priors are globally off, this variant is identical to model_optimal.
+      model_optimal_out
+    }
     chalk_out <- simulate_chalk_bracket(season, seeds_season, slots_season)
 
     scoring_mode <- "slot_accurate"
@@ -684,6 +860,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Method = "model",
       Scoring_Mode = scoring_mode,
       Train_Through = season - 1L,
+      Rolling_Model = rolling_fit$selected_model,
+      Rolling_Val_LogLoss = rolling_fit$validation_log_loss,
       Correct_Games = scored_model$total_correct,
       Total_Games = 63L,
       Total_Points = scored_model$total_points,
@@ -699,6 +877,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Method = "model_optimal",
       Scoring_Mode = scoring_mode,
       Train_Through = season - 1L,
+      Rolling_Model = rolling_fit$selected_model,
+      Rolling_Val_LogLoss = rolling_fit$validation_log_loss,
       Correct_Games = scored_model_optimal$total_correct,
       Total_Games = 63L,
       Total_Points = scored_model_optimal$total_points,
@@ -714,6 +894,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Method = "model_optimal_no_priors",
       Scoring_Mode = scoring_mode,
       Train_Through = season - 1L,
+      Rolling_Model = rolling_fit$selected_model,
+      Rolling_Val_LogLoss = rolling_fit$validation_log_loss,
       Correct_Games = scored_model_optimal_no_priors$total_correct,
       Total_Games = 63L,
       Total_Points = scored_model_optimal_no_priors$total_points,
@@ -729,6 +911,8 @@ main <- function(seasons = BACKTEST_SEASONS) {
       Method = "chalk",
       Scoring_Mode = scoring_mode,
       Train_Through = NA_integer_,
+      Rolling_Model = "chalk_baseline",
+      Rolling_Val_LogLoss = NA_real_,
       Correct_Games = scored_chalk$total_correct,
       Total_Games = 63L,
       Total_Points = scored_chalk$total_points,
@@ -753,7 +937,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
 
     if (isTRUE(LEAKAGE_GUARD) && profile != "minimal" && season %in% LEAKAGE_GUARD_SEASONS) {
       message("Leakage guard: shuffled-label control for season ", season)
-      shuffled_model <- fit_rolling_model(
+      shuffled_fit <- fit_rolling_model(
         matchup_data,
         season,
         shuffle_labels = TRUE,
@@ -762,7 +946,7 @@ main <- function(seasons = BACKTEST_SEASONS) {
       shuffled_out <- simulate_model_bracket(
         data,
         season,
-        shuffled_model,
+        shuffled_fit$model,
         seeds_override = seeds_season,
         slots_override = slots_season
       )
