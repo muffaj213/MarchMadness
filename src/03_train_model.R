@@ -457,10 +457,69 @@ run_tuned <- function(train_data, matchup_data, test_years) {
   list(comparison = comparison, tuned_params = tuned_params, models = model_store, calibrators = calibrators)
 }
 
+#' Fit one candidate model for a single OOF fold
+#' @param model_name Name like "glm_baseline" or "xgboost_tuned"
+#' @param analysis_data Training rows for the fold
+#' @param tuned_params Tuned parameter list from run_tuned()
+fit_model_for_oof <- function(model_name, analysis_data, tuned_params) {
+  mt <- sub("_(baseline|tuned)$", "", model_name)
+  variant <- sub("^.*_(baseline|tuned)$", "\\1", model_name)
+  train_fct <- analysis_data %>%
+    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+  if (variant == "baseline") {
+    wf <- build_baseline_workflow(mt, train_fct)
+    return(fit(wf, data = train_fct))
+  }
+  if (variant == "tuned") {
+    best <- tuned_params[[mt]]
+    if (is.null(best)) stop("Missing tuned params for model ", mt)
+    wf <- build_tuned_workflow(mt, train_fct)
+    final_wf <- finalize_workflow(wf, best)
+    return(fit(final_wf, data = train_fct))
+  }
+  stop("Unknown model variant in model_name: ", model_name)
+}
+
+#' Build OOF stacking dataset with time-safe folds
+#' @return Tibble with candidate columns and outcome_num
+build_oof_meta_data <- function(matchup_data, candidate_names, weight_tune_years, tuned_params) {
+  assess_years <- sort(intersect(as.integer(weight_tune_years), unique(as.integer(matchup_data$Season))))
+  if (length(assess_years) == 0) return(tibble())
+  folds <- list()
+  for (yr in assess_years) {
+    analysis_data <- matchup_data %>% filter(Season < yr)
+    assess_data <- matchup_data %>%
+      filter(Season == yr) %>%
+      mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
+    if (nrow(analysis_data) < 100 || nrow(assess_data) < 10) next
+    pred_cols <- list()
+    for (nm in candidate_names) {
+      p <- tryCatch({
+        fit_obj <- fit_model_for_oof(nm, analysis_data, tuned_params)
+        predict_win_prob(fit_obj, assess_data)
+      }, error = function(e) {
+        message("  OOF stack skip for ", nm, " in year ", yr, ": ", conditionMessage(e))
+        rep(NA_real_, nrow(assess_data))
+      })
+      pred_cols[[nm]] <- pmax(1e-15, pmin(1 - 1e-15, as.numeric(p)))
+    }
+    fold_df <- tibble(
+      Season = yr,
+      outcome_num = as.integer(assess_data$outcome == "Win")
+    )
+    for (nm in candidate_names) fold_df[[nm]] <- pred_cols[[nm]]
+    folds[[length(folds) + 1]] <- fold_df
+  }
+  if (length(folds) == 0) return(tibble())
+  bind_rows(folds) %>%
+    filter(if_all(all_of(candidate_names), ~ is.finite(.x) & !is.na(.x)))
+}
+
 #' Run ensemble via calibrated stacking meta-model.
 #' @return List with ensemble eval and serialized ensemble object
 run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
                          baseline_models, baseline_cals, tuned_models, tuned_cals,
+                         tuned_params,
                          weight_tune_years = WEIGHT_TUNE_YEARS) {
   message("\n========== ENSEMBLE (robust calibrated blend) ==========")
   ranked <- bind_rows(
@@ -494,20 +553,16 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   names(weights) <- names(models)
   meta_coef <- NULL
 
-  tune_data <- matchup_data %>%
-    filter(Season %in% weight_tune_years) %>%
-    mutate(outcome = factor(outcome, levels = c(0, 1), labels = c("Lose", "Win")))
-  if (nrow(tune_data) >= 60) {
-    preds_tune <- list()
-    for (nm in names(models)) {
-      p <- predict_win_prob(models[[nm]], tune_data)
-      preds_tune[[nm]] <- apply_platt(p, calibrators[[nm]])
-    }
-    pred_tune_df <- bind_cols(preds_tune)
-    meta_data <- pred_tune_df %>%
-      mutate(outcome_num = as.integer(tune_data$outcome == "Win"))
+  meta_data <- build_oof_meta_data(
+    matchup_data = matchup_data,
+    candidate_names = names(models),
+    weight_tune_years = weight_tune_years,
+    tuned_params = tuned_params
+  )
+  if (nrow(meta_data) >= 60) {
+    meta_fit_data <- meta_data %>% select(all_of(names(models)), outcome_num)
     meta_fit <- tryCatch(
-      glm(outcome_num ~ ., data = meta_data, family = binomial()),
+      glm(outcome_num ~ ., data = meta_fit_data, family = binomial()),
       error = function(e) NULL
     )
     if (!is.null(meta_fit)) {
@@ -516,6 +571,8 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
         meta_coef <- as.numeric(cf[c("(Intercept)", names(models))])
       }
     }
+  } else {
+    message("  Insufficient OOF rows for stacked meta-learner; falling back to equal-weight blend.")
   }
 
   test_data <- matchup_data %>%
@@ -562,7 +619,7 @@ run_ensemble <- function(matchup_data, test_years, baseline_comp, tuned_comp,
   }
 
   if (!is.null(meta_coef)) {
-    message("  Blend method: stacked logistic meta-learner on years ", paste(weight_tune_years, collapse = ", "))
+    message("  Blend method: stacked logistic meta-learner (OOF) on years ", paste(weight_tune_years, collapse = ", "))
   } else {
     message("  Blend weights: ", paste(sprintf("%s=%.3f", names(weights), weights), collapse = ", "))
   }
@@ -718,7 +775,8 @@ main <- function() {
     baseline_models = baseline_out$models,
     baseline_cals = baseline_out$calibrators,
     tuned_models = tuned_out$models,
-    tuned_cals = tuned_out$calibrators
+    tuned_cals = tuned_out$calibrators,
+    tuned_params = tuned_out$tuned_params
   )
   ensemble_comp <- tibble()
   if (!is.null(ensemble_out)) {
@@ -854,7 +912,8 @@ save_best_models_report <- function(baseline_comp, tuned_comp, ensemble_out, bes
     ensemble_md <- paste0(
       "\n---\n\n## Ensemble Results\n\n",
       "*Blended predictions from baseline + tuned GLM, XGBoost, and Random Forest. ",
-      "Weights optimized on years 2019-2021 with entropy regularization (calibration disabled; overfits on ~120 games).*\n\n",
+      "Stacked via logistic meta-learner trained on out-of-fold predictions from years ",
+      paste(WEIGHT_TUNE_YEARS, collapse = ", "), ".*\n\n",
       "| Metric   | Accuracy | Log Loss | N Games |\n",
       "|----------|----------|----------|--------|\n",
       "| Ensemble | ", ec_acc, "% | ", ec_ll, " | ", ec$N_Games[1], " |\n\n",
